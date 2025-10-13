@@ -1,16 +1,16 @@
 <template>
 	<view class="layout" @touchmove.stop.prevent="() => {}" :style="'height:'+screenHeight+'px!important'">
 		<view class="avater"></view>
-		<view class="name">Nepnep</view>
+		<view class="name">{{name_text}}</view>
 		<view class="ip">192.10.11.2</view>
 		<view class="sections">
-			<view class="login section">
+			<view class="login section" @click="login_click">
 				<uni-icons type="right" size="25"></uni-icons>
-				<view class="text">切换账号</view>
+				<view class="text">{{login_text}}</view>
 			</view>
 			<view class="net section" @click="netclick">
 				<uni-icons type="gear-filled" size="25"></uni-icons>
-				<view class="text">网络设置</view>
+				<view class="text">网络配置</view>
 			</view>
 			<view class="set section">
 				<uni-icons type="gear-filled" size="25"></uni-icons>
@@ -26,14 +26,17 @@
 	const screenHeight=ref();
 	const ip=ref('192.168.31.65:3000/send');
 	const url=computed(()=> 'http://'+ip.value);
-	
-	
+	const login_flag=ref(false)
+	const login_text=computed(()=> login_flag.value ? '切换账号' : '登录/注册');
+	const name_text=ref('游客');
 	onLoad(()=>{
 		screenHeight.value=uni.getSystemInfoSync().windowHeight;
 		get_ip();
+		userInfo_get();
 	})
 	onShow(()=>{
 		get_ip();
+		console.log(screenHeight.value);
 	})
 	
 	function netclick()
@@ -71,13 +74,30 @@
 		});
 	}
 	
+	function userInfo_get()
+	{
+		uni.getStorage({
+			key: 'userInfo',
+			success: function (res) {
+				console.log(res.data);
+				name_text.value=res.data['name'];
+			}
+		});
+	}
+	
+	function login_click()
+	{
+		uni.navigateTo({
+		url: '../login/login'
+		});
+	}
+	
 </script>
 
 <style lang='scss' scoped>
 	.layout{
-		height: 100%;
+		position: absolute;
 		width: 100%;
-		/* background-color: red; */
 		background-image: url('~@/static/background.png');
 		background-size: cover;
 		background-position: center;
