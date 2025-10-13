@@ -133,7 +133,7 @@ app.post('/api/register', async (req, res) => {
         try {
             // 检查用户是否已存在
             const [rows] = await connection.execute(
-                'SELECT id FROM user WHERE userAccount = ? AND isDelete = 0',
+                'SELECT id FROM user WHERE userAccount = ? ',
                 [userAccount]
             );
 
@@ -194,7 +194,7 @@ app.post('/api/login', async (req, res) => {
         try {
             // 查找用户
             const [rows] = await connection.execute(
-                'SELECT * FROM user WHERE userAccount = ? AND isDelete = 0',
+                'SELECT * FROM user WHERE userAccount = ? ',
                 [userAccount]
             );
 
@@ -341,7 +341,7 @@ app.post('/api/face-recognition', upload.single('imagefile'), async (req, res) =
                 const connection = await pool.getConnection();
                 try {
                     const [rows] = await connection.execute(
-                        'SELECT * FROM user WHERE id = ? AND isDelete = 0',
+                        'SELECT * FROM user WHERE id = ? ',
                         [recognitionResult.userId]
                     );
 
