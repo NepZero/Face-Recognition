@@ -9,8 +9,8 @@
 <script setup>
 	import { onLoad,onShow} from '@dcloudio/uni-app';
 	import {ref,computed} from 'vue';
-	const ip=ref('192.168.31.65:3000/send');
-	const url=computed(()=> 'http://'+ip.value);
+	const ip=ref('192.168.31.65:3000');
+	const url=computed(()=> 'http://'+ip.value+'/send');
 	const connection_flag=ref(false);
 	const screenHeight=ref();
 	
@@ -41,6 +41,7 @@
 								'user': 'test'
 							},
 							success: (res) => {
+								console.log(res)
 								uni.showToast({
 								    title: '上传成功',
 								    icon: 'success'
@@ -98,6 +99,13 @@
 				if(res.confirm)
 				{
 					ip.value=res.content;
+					uni.setStorage({
+						key: 'upload_ip',
+						data: ip.value,
+						success: function () {
+							console.log('success');
+						}
+					});
 				}
 			},
 		})
@@ -107,7 +115,6 @@
 		uni.getStorage({
 			key: 'upload_ip',
 			success: function (res) {
-				console.log(res.data);
 				ip.value=res.data;
 			}
 		});
