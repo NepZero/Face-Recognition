@@ -5,3 +5,6 @@ uniapp文件夹为前端app代码，back为后端代码
 # 仓库使用
 下载并安装app，打开后端nodejs服务器，确保设备在同一网络下，打开命令行用ipconfig查看ip。在app的个人中心的网络设置中输入ip加上/send即可上传图片
 
+# App测试
+下载安装HbuilderX,用此软件打开uniapp文件夹,依次点击运行->运行到浏览器
+
