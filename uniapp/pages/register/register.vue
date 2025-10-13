@@ -86,9 +86,6 @@
 	
 	function register_click()
 	{
-		console.log(account_value.value);
-		console.log(password_value.value);
-		console.log(password_again_value.value);
 		if(register_match())
 		{
 			return;
@@ -102,8 +99,7 @@
 		    method: 'POST',
 			data:{"userAccount":account_value.value,"userPassword":password_value.value,"userName":username_value.value},
 		    success: (res) => {
-				res=JSON.stringify(res);
-				if(res.success)
+				if(res.data.success)
 				{
 					uni.showToast({
 					    title: '注册成功',
@@ -115,6 +111,7 @@
 				}
 				else
 				{
+					console.log(res)
 					uni.showToast({
 					    title: '注册失败',
 					    icon: 'error'

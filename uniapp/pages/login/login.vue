@@ -19,13 +19,15 @@
 <script setup>
 	import { onLoad,onShow} from '@dcloudio/uni-app';
 	import {ref,computed} from 'vue';
+	const ip=ref('192.168.31.65:3000');
 	const screenHeight=ref();
-	const login_url=ref('192.168.31.65:3000/api/login');
+	const login_url=computed(()=> 'http://'+ip.value+'/api/login');
 	const account_value=ref();
 	const password_value=ref();
 	
 	onLoad(()=>{
 		screenHeight.value=uni.getSystemInfoSync().windowHeight;
+		get_ip();
 	})
 	
 	function login_match()
@@ -50,8 +52,6 @@
 	
 	function login_click()
 	{
-		console.log(account_value.value);
-		console.log(password_value.value);
 		if(login_match())
 		{
 			return;
@@ -65,7 +65,7 @@
 		    method: 'POST',
 			data:{"userAccount":account_value.value,"userPassword":password_value.value},
 		    success: (res) => {
-				res=JSON.stringify(res);
+				res=res.data;
 				if(res.success)
 				{
 					uni.setStorage({
@@ -107,6 +107,16 @@
 	{
 		uni.redirectTo({
 		url: '../register/register'
+		});
+	}
+	function get_ip()
+	{
+		uni.getStorage({
+			key: 'upload_ip',
+			success: function (res) {
+				console.log(res.data);
+				ip.value=res.data;
+			}
 		});
 	}
 </script>
