@@ -92,13 +92,21 @@ app.use((req, res, next) => {
 // 1. 用户注册接口
 app.post('/api/register', async (req, res) => {
     try {
-        const { userAccount, userPassword, userName } = req.body;
+        const { userAccount, userPassword, userName, classId } = req.body;
 
         // 验证输入
         if (!userAccount || !userPassword) {
             return res.status(400).json({
                 success: false,
                 message: '账号和密码不能为空'
+            });
+        }
+
+        // 学生注册必须选择班级
+        if (!classId) {
+            return res.status(400).json({
+                success: false,
+                message: '学生注册时必须选择班级'
             });
         }
 
@@ -148,10 +156,22 @@ app.post('/api/register', async (req, res) => {
             const saltRounds = 10;
             const hashedPassword = await bcrypt.hash(userPassword, saltRounds);
 
-            // 插入新用户
+            // 验证班级是否存在
+            const [classRows] = await connection.execute(
+                'SELECT id FROM class WHERE id = ?',
+                [classId]
+            );
+            if (classRows.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: '选择的班级不存在'
+                });
+            }
+
+            // 插入新用户（固定为学生角色）
             const [result] = await connection.execute(
-                'INSERT INTO user (userAccount, userPassword, userName) VALUES (?, ?, ?)',
-                [userAccount, hashedPassword, userName]
+                'INSERT INTO user (userAccount, userPassword, userName, userRole, classId) VALUES (?, ?, ?, ?, ?)',
+                [userAccount, hashedPassword, userName, 'student', classId]
             );
 
             res.json({
@@ -160,7 +180,9 @@ app.post('/api/register', async (req, res) => {
                 data: {
                     userId: result.insertId,
                     userAccount: userAccount,
-                    userName: userName
+                    userName: userName,
+                    userRole: 'student',
+                    classId: classId
                 }
             });
 
@@ -220,6 +242,8 @@ app.post('/api/login', async (req, res) => {
             req.session.userId = user.id;
             req.session.userAccount = user.userAccount;
             req.session.userName = user.userName;
+            req.session.userRole = user.userRole;
+            req.session.classId = user.classId;
             req.session.faceRegistered = user.faceRegistered;
 
             res.json({
@@ -229,6 +253,8 @@ app.post('/api/login', async (req, res) => {
                     userId: user.id,
                     userAccount: user.userAccount,
                     userName: user.userName,
+                    userRole: user.userRole,
+                    classId: user.classId,
                     faceRegistered: user.faceRegistered
                 }
             });
@@ -320,6 +346,8 @@ app.post('/api/face-register', upload.single('imagefile'), async (req, res) => {
 // 4. 人脸识别接口（包含签到记录）
 app.post('/api/face-recognition', upload.single('imagefile'), async (req, res) => {
     try {
+        const { taskId } = req.body; // 可选的签到任务ID
+
         if (!req.file) {
             return res.status(400).json({
                 success: false,
@@ -354,13 +382,30 @@ app.post('/api/face-recognition', upload.single('imagefile'), async (req, res) =
 
                     const user = rows[0];
 
+                    // 验证签到任务（如果提供了taskId）
+                    let validTask = true;
+                    if (taskId) {
+                        const [taskRows] = await connection.execute(
+                            'SELECT * FROM attendance_task WHERE id = ? AND classId = ? AND status = "active" AND startTime <= NOW() AND endTime >= NOW()',
+                            [taskId, user.classId]
+                        );
+
+                        if (taskRows.length === 0) {
+                            validTask = false;
+                        }
+                    }
+
                     // 自动记录签到
                     try {
-                        await connection.execute(
-                            'INSERT INTO attendance_record (userId, checkTime, status) VALUES (?, NOW(), ?)',
-                            [user.id, 1] // 1表示签到成功
-                        );
-                        console.log(`用户 ${user.userAccount} 签到成功`);
+                        if (validTask) {
+                            await connection.execute(
+                                'INSERT INTO attendance_record (userId, taskId, checkTime, status) VALUES (?, ?, NOW(), ?)',
+                                [user.id, taskId || null, 1] // 1表示签到成功
+                            );
+                            console.log(`用户 ${user.userAccount} 签到成功`);
+                        } else {
+                            console.log(`用户 ${user.userAccount} 签到失败：任务无效或已过期`);
+                        }
                     } catch (attendanceError) {
                         console.error('签到记录失败:', attendanceError);
                         // 签到记录失败不影响识别结果
@@ -368,13 +413,14 @@ app.post('/api/face-recognition', upload.single('imagefile'), async (req, res) =
 
                     res.json({
                         success: true,
-                        message: '人脸识别成功，已自动签到',
+                        message: validTask ? '人脸识别成功，已自动签到' : '人脸识别成功，但签到任务无效或已过期',
                         data: {
                             recognized: true,
                             userId: user.id,
                             userAccount: user.userAccount,
                             userName: user.userName,
-                            attendanceRecorded: true
+                            attendanceRecorded: validTask,
+                            taskId: taskId || null
                         }
                     });
                 } finally {
@@ -425,6 +471,292 @@ app.post('/api/logout', (req, res) => {
     });
 });
 
+// 老师发布签到任务接口
+app.post('/api/attendance-task', requireLogin, async (req, res) => {
+    try {
+        const { taskName, classId, startTime, endTime } = req.body;
+        const teacherId = req.session.userId;
+        const userRole = req.session.userRole;
+
+        // 验证用户是否为老师
+        if (userRole !== 'teacher') {
+            return res.status(403).json({
+                success: false,
+                message: '只有老师可以发布签到任务'
+            });
+        }
+
+        // 验证输入
+        if (!taskName || !classId || !startTime || !endTime) {
+            return res.status(400).json({
+                success: false,
+                message: '任务名称、班级、开始时间和结束时间不能为空'
+            });
+        }
+
+        // 验证时间格式和逻辑
+        const start = new Date(startTime);
+        const end = new Date(endTime);
+        const now = new Date();
+
+        if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+            return res.status(400).json({
+                success: false,
+                message: '时间格式不正确'
+            });
+        }
+
+        if (start >= end) {
+            return res.status(400).json({
+                success: false,
+                message: '开始时间必须早于结束时间'
+            });
+        }
+
+        if (end <= now) {
+            return res.status(400).json({
+                success: false,
+                message: '结束时间必须晚于当前时间'
+            });
+        }
+
+        const connection = await pool.getConnection();
+
+        try {
+            // 验证班级是否存在
+            const [classRows] = await connection.execute(
+                'SELECT id FROM class WHERE id = ?',
+                [classId]
+            );
+            if (classRows.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: '选择的班级不存在'
+                });
+            }
+
+            // 创建签到任务
+            const [result] = await connection.execute(
+                'INSERT INTO attendance_task (taskName, teacherId, classId, startTime, endTime) VALUES (?, ?, ?, ?, ?)',
+                [taskName, teacherId, classId, startTime, endTime]
+            );
+
+            res.json({
+                success: true,
+                message: '签到任务发布成功',
+                data: {
+                    taskId: result.insertId,
+                    taskName: taskName,
+                    classId: classId,
+                    startTime: startTime,
+                    endTime: endTime
+                }
+            });
+
+        } finally {
+            connection.release();
+        }
+
+    } catch (error) {
+        console.error('发布签到任务错误:', error);
+        res.status(500).json({
+            success: false,
+            message: '服务器错误'
+        });
+    }
+});
+
+// 获取签到任务列表接口
+app.get('/api/attendance-tasks', requireLogin, async (req, res) => {
+    try {
+        const userRole = req.session.userRole;
+        const userId = req.session.userId;
+        const { status, classId } = req.query;
+
+        const connection = await pool.getConnection();
+
+        try {
+            let query = '';
+            let params = [];
+
+            if (userRole === 'teacher') {
+                // 老师查看自己发布的任务
+                query = `
+                    SELECT at.*, c.className, u.userName as teacherName
+                    FROM attendance_task at
+                    LEFT JOIN class c ON at.classId = c.id
+                    LEFT JOIN user u ON at.teacherId = u.id
+                    WHERE at.teacherId = ?
+                `;
+                params = [userId];
+
+                if (status) {
+                    query += ' AND at.status = ?';
+                    params.push(status);
+                }
+                if (classId) {
+                    query += ' AND at.classId = ?';
+                    params.push(classId);
+                }
+            } else if (userRole === 'student') {
+                // 学生查看自己班级的任务
+                query = `
+                    SELECT at.*, c.className, u.userName as teacherName
+                    FROM attendance_task at
+                    LEFT JOIN class c ON at.classId = c.id
+                    LEFT JOIN user u ON at.teacherId = u.id
+                    LEFT JOIN user student ON student.id = ?
+                    WHERE at.classId = student.classId
+                `;
+                params = [userId];
+
+                if (status) {
+                    query += ' AND at.status = ?';
+                    params.push(status);
+                }
+            } else {
+                return res.status(403).json({
+                    success: false,
+                    message: '权限不足'
+                });
+            }
+
+            query += ' ORDER BY at.createTime DESC';
+
+            const [rows] = await connection.execute(query, params);
+
+            res.json({
+                success: true,
+                message: '获取签到任务列表成功',
+                data: rows
+            });
+
+        } finally {
+            connection.release();
+        }
+
+    } catch (error) {
+        console.error('获取签到任务列表错误:', error);
+        res.status(500).json({
+            success: false,
+            message: '服务器错误'
+        });
+    }
+});
+
+// 获取签到统计接口（老师专用）
+app.get('/api/attendance-stats', requireLogin, async (req, res) => {
+    try {
+        const userRole = req.session.userRole;
+        const { taskId } = req.query;
+
+        if (userRole !== 'teacher') {
+            return res.status(403).json({
+                success: false,
+                message: '只有老师可以查看签到统计'
+            });
+        }
+
+        if (!taskId) {
+            return res.status(400).json({
+                success: false,
+                message: '请提供任务ID'
+            });
+        }
+
+        const connection = await pool.getConnection();
+
+        try {
+            // 获取任务信息
+            const [taskRows] = await connection.execute(
+                'SELECT * FROM attendance_task WHERE id = ?',
+                [taskId]
+            );
+
+            if (taskRows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: '签到任务不存在'
+                });
+            }
+
+            const task = taskRows[0];
+
+            // 获取班级学生总数
+            const [studentRows] = await connection.execute(
+                'SELECT COUNT(*) as total FROM user WHERE classId = ? AND userRole = "student"',
+                [task.classId]
+            );
+
+            // 获取已签到学生数
+            const [attendanceRows] = await connection.execute(
+                'SELECT COUNT(DISTINCT userId) as checked FROM attendance_record WHERE taskId = ? AND status = 1',
+                [taskId]
+            );
+
+            // 获取签到详情
+            const [detailRows] = await connection.execute(
+                `SELECT u.userName, u.userAccount, ar.checkTime, ar.status
+                 FROM attendance_record ar
+                 LEFT JOIN user u ON ar.userId = u.id
+                 WHERE ar.taskId = ?
+                 ORDER BY ar.checkTime DESC`,
+                [taskId]
+            );
+
+            res.json({
+                success: true,
+                message: '获取签到统计成功',
+                data: {
+                    task: task,
+                    totalStudents: studentRows[0].total,
+                    checkedStudents: attendanceRows[0].checked,
+                    attendanceRate: studentRows[0].total > 0 ?
+                        (attendanceRows[0].checked / studentRows[0].total * 100).toFixed(2) + '%' : '0%',
+                    details: detailRows
+                }
+            });
+
+        } finally {
+            connection.release();
+        }
+
+    } catch (error) {
+        console.error('获取签到统计错误:', error);
+        res.status(500).json({
+            success: false,
+            message: '服务器错误'
+        });
+    }
+});
+
+// 获取班级列表接口
+app.get('/api/classes', async (req, res) => {
+    try {
+        const connection = await pool.getConnection();
+
+        try {
+            const [rows] = await connection.execute(
+                'SELECT id, className, classCode FROM class ORDER BY className'
+            );
+
+            res.json({
+                success: true,
+                message: '获取班级列表成功',
+                data: rows
+            });
+        } finally {
+            connection.release();
+        }
+    } catch (error) {
+        console.error('获取班级列表错误:', error);
+        res.status(500).json({
+            success: false,
+            message: '服务器错误'
+        });
+    }
+});
+
 // 获取当前用户信息接口
 app.get('/api/user-info', (req, res) => {
     if (!req.session.userId) {
@@ -441,6 +773,8 @@ app.get('/api/user-info', (req, res) => {
             userId: req.session.userId,
             userAccount: req.session.userAccount,
             userName: req.session.userName,
+            userRole: req.session.userRole,
+            classId: req.session.classId,
             faceRegistered: req.session.faceRegistered
         }
     });
