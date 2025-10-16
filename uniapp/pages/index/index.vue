@@ -3,21 +3,26 @@
 		<button class='loadbutton' size="default" @click="uploadimg">点击拍照</button>
 		<button size="default" @click="testConnection" :loading=connection_flag>网络测试</button>
 		<button size="default" @click="ipconfig">网络配置</button>
+		<button size="default" @click="checkClick" v-if="!studentFlag">发布签到</button>
 	</view>
 </template>
 
 <script setup>
 	import { onLoad,onShow} from '@dcloudio/uni-app';
 	import {ref,computed} from 'vue';
+	import { isStudent } from '../../utils/utils';
+	
 	const ip=ref('192.168.31.65:3000');
 	const url=computed(()=> 'http://'+ip.value+'/send');
 	const connection_flag=ref(false);
 	const screenHeight=ref();
+	const studentFlag=ref(true);
 	
 	
 	onLoad(()=>{
 		screenHeight.value=uni.getSystemInfoSync().windowHeight;
 		get_ip();
+		studentFlag.value=isStudent();
 	})
 	onShow(()=>{
 		get_ip();
@@ -89,7 +94,6 @@
 	
 	function ipconfig()
 	{
-		console.log(ip.value)
 		uni.showModal({
 			title: ip.value,
 			content:'',
@@ -118,6 +122,11 @@
 				ip.value=res.data;
 			}
 		});
+	}
+	
+	function checkClick()
+	{
+		console.log(111);
 	}
 </script>
 

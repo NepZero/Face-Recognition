@@ -1,7 +1,7 @@
 <template>
 	<view class="layout" @touchmove.stop.prevent="() => {}" :style="'height:'+screenHeight+'px!important'">
 		<view class="avater"></view>
-		<view class="name">{{name_text}}</view>
+		<view class="name">{{userInfo['name']}}</view>
 		<view class="ip">192.10.11.2</view>
 		<view class="sections">
 			<view class="login section" @click="login_click">
@@ -15,6 +15,10 @@
 			<view class="set section">
 				<uni-icons type="gear-filled" size="25"></uni-icons>
 				<view class="text">设置</view>
+			</view>
+			<view class="faceUpload section" v-if="login_flag" @click="faceClick">
+				<uni-icons type="gear-filled" size="25"></uni-icons>
+				<view class="text">上传照片</view>
 			</view>
 			<view class="loginOut section" v-if="login_flag" @click="logOutClick">
 				<uni-icons type="gear-filled" size="25"></uni-icons>
@@ -35,6 +39,7 @@
 	const login_flag=ref(isLogin() ? true :false);
 	// const login_flag=ref(true);
 	const login_text=computed(()=> login_flag.value ? '切换账号' : '登录/注册');
+	const userInfo=ref({'name':'游客'});
 	const name_text=ref('游客');
 	
 	
@@ -89,30 +94,69 @@
 			uni.getStorage({
 				key: 'userInfo',
 				success: function (res) {
-					name_text.value=res.data['name'];
+					userInfo.value={
+						'name':res.data['name'],
+						'id':res.data['id'],
+						'classid':res.data['classid'],
+						'face':res.data['face']
+					}
 				}
 			});
 		}
 		else
 		{
-			name_text.value='游客';
+			userInfo.value={'name':'游客'};
 		}
 	}
 	
-	function login_click()
+	function login_click()	//登录event
 	{
 		uni.navigateTo({
 		url: '../login/login'
 		});
 	}
 	
-	function logOutClick()
+	function logOutClick()	//登出event
 	{
 		logOut('http://'+ip.value+'/api/logout');
 		login_flag.value=false;
 		userInfo_update(0);
 	}
 	
+	function faceClick()
+	{
+		uni.chooseImage({
+			count: 1, //默认9
+			sizeType: ['original', 'compressed'], //可以指定是原图还是压缩图，默认二者都有
+			sourceType: ['camera','album'], 
+			success: function (res) {
+				const path=res.tempFilePaths[0];
+				uni.uploadFile({
+							url: 'http://'+ip.value+'/api/face-recognition', //仅为示例，非真实的接口地址
+							filePath: path,
+							name: 'imagefile',
+							formData: {
+								'userId':userInfo.id
+							},
+							success: (res) => {
+								uni.showToast({
+								    title: '上传成功',
+								    icon: 'success'
+								});
+							},
+							fail:(res)=>{
+								uni.showToast({
+								    title: '上传失败',
+								    icon: 'fail'
+								});
+							},
+							complete:()=>{
+								console.log('buzhidao');
+							}
+				});
+			}
+		});
+	}
 </script>
 
 <style lang='scss' scoped>
@@ -155,7 +199,7 @@
 				font-size: 40rpx;
 				padding-left: 20rpx;
 				display: flex;
-				background-color: white;
+				background-color: rgba(255, 255, 255, 0.5);
 				align-items: center;
 			}
 			.section{

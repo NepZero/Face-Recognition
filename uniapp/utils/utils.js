@@ -1,4 +1,4 @@
-export function loginSet(flag) //是否登录设置 flag==1设置成登录状态
+export function loginSet(flag) //登录状态设置 flag==1设置成登录状态
 {
 	if(flag==1)
 	{
@@ -10,7 +10,7 @@ export function loginSet(flag) //是否登录设置 flag==1设置成登录状态
 	}
 }
 
-export function isLogin()
+export function isLogin()	//是否登录
 {
 	const flag = uni.getStorageSync('isLogin');
 	if(flag)
@@ -23,7 +23,7 @@ export function isLogin()
 	}
 }
 
-export function logOut(url)
+export function logOut(url)		//登出请求
 {
 	uni.request({
 	    url: url, // 
@@ -54,4 +54,17 @@ export function logOut(url)
 			});
 	    }
 	});
+}
+
+export function isStudent()	//是否是学生
+{
+	const userInfo = uni.getStorageSync('userInfo');
+	if(userInfo && userInfo.userRole!='student')
+	{
+		return false;
+	}
+	else
+	{
+		return true;
+	}
 }
