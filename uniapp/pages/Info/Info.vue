@@ -16,6 +16,10 @@
 				<uni-icons type="gear-filled" size="25"></uni-icons>
 				<view class="text">设置</view>
 			</view>
+			<view class="loginOut section" v-if="login_flag" @click="logOutClick">
+				<uni-icons type="gear-filled" size="25"></uni-icons>
+				<view class="text">登出</view>
+			</view>
 		</view>
 	</view>
 </template>
@@ -23,20 +27,25 @@
 <script setup>
 	import { onLoad,onShow} from '@dcloudio/uni-app';
 	import {ref,computed} from 'vue';
+	import { isLogin,logOut} from '../../utils/utils';
+	
 	const screenHeight=ref();
-	const ip=ref('192.168.31.65:3000/send');
-	const url=computed(()=> 'http://'+ip.value);
-	const login_flag=ref(false)
+	const ip=ref('192.168.31.65:3000');
+	const url=computed(()=> 'http://'+ip.value+'/send');
+	const login_flag=ref(isLogin() ? true :false);
+	// const login_flag=ref(true);
 	const login_text=computed(()=> login_flag.value ? '切换账号' : '登录/注册');
 	const name_text=ref('游客');
+	
+	
 	onLoad(()=>{
 		screenHeight.value=uni.getSystemInfoSync().windowHeight;
 		get_ip();
-		userInfo_get();
 	})
 	onShow(()=>{
 		get_ip();
-		console.log(screenHeight.value);
+		login_flag.value=isLogin() ? true :false;
+		userInfo_update(login_flag.value);
 	})
 	
 	function netclick()
@@ -68,21 +77,26 @@
 		uni.getStorage({
 			key: 'upload_ip',
 			success: function (res) {
-				console.log(res.data);
 				ip.value=res.data;
 			}
 		});
 	}
 	
-	function userInfo_get()
+	function userInfo_update(flag)	//更新用户信息,flag==1为登录状态 flag==0为登出状态
 	{
-		uni.getStorage({
-			key: 'userInfo',
-			success: function (res) {
-				console.log(res.data);
-				name_text.value=res.data['name'];
-			}
-		});
+		if(flag)
+		{
+			uni.getStorage({
+				key: 'userInfo',
+				success: function (res) {
+					name_text.value=res.data['name'];
+				}
+			});
+		}
+		else
+		{
+			name_text.value='游客';
+		}
 	}
 	
 	function login_click()
@@ -90,6 +104,13 @@
 		uni.navigateTo({
 		url: '../login/login'
 		});
+	}
+	
+	function logOutClick()
+	{
+		logOut('http://'+ip.value+'/api/logout');
+		login_flag.value=false;
+		userInfo_update(0);
 	}
 	
 </script>

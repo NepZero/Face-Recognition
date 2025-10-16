@@ -16,6 +16,10 @@
 			<view class="text">用户名</view>
 			<input class="uni-input account" focus placeholder="请输入用户名" v-model="username_value" />
 		</view>
+		<view class="classid_box">
+			<view class="text">班级ID</view>
+			<input class="uni-input account" focus placeholder="请输入班级ID" v-model="classid_value" />
+		</view>
 		<button size="default" @click="register_click" class="register_button">注册</button>
 		<view class="login_box">
 			<view class="text" @click="login_click">账号密码登录</view>
@@ -32,6 +36,7 @@
 	const username_value=ref();
 	const account_value=ref();
 	const password_value=ref();
+	const classid_value=ref();
 	const password_again_value=ref();
 	const register_url=computed(()=> 'http://'+ip.value+'/api/register');
 	
@@ -61,6 +66,14 @@
 		{
 			uni.showToast({
 			    title: '密码不能为空',
+			    icon: 'error'
+			});
+			return true;
+		}
+		else if(!classid_value.value)
+		{
+			uni.showToast({
+			    title: '班级ID不能为空',
 			    icon: 'error'
 			});
 			return true;
@@ -97,7 +110,7 @@
 		uni.request({
 		    url: register_url.value, // 
 		    method: 'POST',
-			data:{"userAccount":account_value.value,"userPassword":password_value.value,"userName":username_value.value},
+			data:{"userAccount":account_value.value,"userPassword":password_value.value,"userName":username_value.value,"classId":classid_value.value},
 		    success: (res) => {
 				if(res.data.success)
 				{
@@ -163,6 +176,12 @@
 			display: flex;
 			border-bottom: 1rpx solid gray;
 		}
+		.classid_box{
+			padding-top: 20rpx;
+			margin-left: 50rpx;
+			display: flex;
+			border-bottom: 1rpx solid gray;
+		}
 		input{
 			margin-left: 50rpx;
 		}
@@ -184,7 +203,6 @@
 			align-items: center;
 			font-size: 35rpx;
 			color: gray;
-			
 		}
 	}
 </style>

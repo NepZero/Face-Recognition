@@ -19,6 +19,8 @@
 <script setup>
 	import { onLoad,onShow} from '@dcloudio/uni-app';
 	import {ref,computed} from 'vue';
+	import { loginSet } from '../../utils/utils';
+	
 	const ip=ref('192.168.31.65:3000');
 	const screenHeight=ref();
 	const login_url=computed(()=> 'http://'+ip.value+'/api/login');
@@ -30,7 +32,7 @@
 		get_ip();
 	})
 	
-	function login_match()
+	function login_match()	//登录账号密码检测是否合法
 	{
 		if(!account_value.value)
 		{
@@ -50,7 +52,7 @@
 		}
 	}
 	
-	function login_click()
+	function login_click()	//登录按钮event
 	{
 		if(login_match())
 		{
@@ -70,11 +72,12 @@
 				{
 					uni.setStorage({
 						key: 'userInfo',
-						data: {'name':res.data.userName,'id':res.data.userId,'account':res.data.userAccount,'face':res.data.faceRegistered},
+						data: {'name':res.data.userName,'id':res.data.userId,'account':res.data.userAccount,'face':res.data.faceRegistered,'classid':res.data.classId,'userRole':res.data.userRole},
 						success: function () {
 							console.log('setStorage success');
 						}
 					});
+					loginSet(1);
 					uni.showToast({
 					    title: '登录成功',
 					    icon: 'success'
@@ -103,13 +106,13 @@
 		});
 	}
 	
-	function register_click()
+	function register_click()	//跳转到注册页面
 	{
 		uni.redirectTo({
 		url: '../register/register'
 		});
 	}
-	function get_ip()
+	function get_ip()	//获取服务器ip
 	{
 		uni.getStorage({
 			key: 'upload_ip',
