@@ -89,6 +89,17 @@ app.use((req, res, next) => {
     next();
 });
 
+// 中间件：验证用户登录状态
+const requireLogin = (req, res, next) => {
+    if (!req.session.userId) {
+        return res.status(401).json({
+            success: false,
+            message: '请先登录'
+        });
+    }
+    next();
+};
+
 // 1. 用户注册接口
 app.post('/api/register', async (req, res) => {
     try {
@@ -780,16 +791,6 @@ app.get('/api/user-info', (req, res) => {
     });
 });
 
-// 中间件：验证用户登录状态
-const requireLogin = (req, res, next) => {
-    if (!req.session.userId) {
-        return res.status(401).json({
-            success: false,
-            message: '请先登录'
-        });
-    }
-    next();
-};
 
 app.get('/home', (req, res) => {
     res.json({
