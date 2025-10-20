@@ -202,7 +202,6 @@
 
 **请求参数：**
 - `imagefile`: 待识别的人脸图片文件（必需）
-- `taskId`: 可选的签到任务ID
 
 **响应示例：**
 
@@ -214,10 +213,9 @@
     "data": {
         "recognized": true,
         "userId": 1,
-        "userAccount": "student001",
-        "userName": "张三",
-        "attendanceRecorded": true,
-        "taskId": 1
+        "userAccount": "testuser",
+        "userName": "测试用户",
+        "attendanceRecorded": true
     }
 }
 ```
@@ -252,7 +250,7 @@
 
 **请求参数：** 无需参数
 
-**功能说明：** 获取所有班级信息，供学生注册和老师发布签到任务时选择
+**功能说明：** 获取所有班级信息，供学生注册时选择
 
 **响应示例：**
 ```json
@@ -262,13 +260,13 @@
     "data": [
         {
             "id": 1,
-            "className": "计算机科学与技术2021级1班",
-            "classCode": "CS2021-1"
+            "className": "计算机科学与技术2023级1班",
+            "classCode": "CS2023-1"
         },
         {
             "id": 2,
-            "className": "计算机科学与技术2021级2班",
-            "classCode": "CS2021-2"
+            "className": "计算机科学与技术2023级2班",
+            "classCode": "CS2023-2"
         }
     ]
 }
@@ -292,11 +290,21 @@
 
 **参数说明：**
 - `taskName`: 签到任务名称，最多100字符
-- `classId`: 目标班级ID，必须是存在的班级
+- `classId`: 目标班级ID，必须是存在的班级，且必须是该老师所在的班级
 - `startTime`: 签到开始时间，格式：YYYY-MM-DD HH:mm:ss
 - `endTime`: 签到结束时间，必须晚于开始时间
 
+**业务规则：**
+- 只有老师可以发布签到任务
+- 老师只能为自己所在的班级发布签到任务
+- 任务名称最多100字符
+- 开始时间必须早于结束时间
+- 结束时间必须晚于当前时间
+- 目标班级必须存在且老师必须属于该班级
+
 **响应示例：**
+
+成功发布：
 ```json
 {
     "success": true,
@@ -308,6 +316,50 @@
         "startTime": "2024-01-01 08:00:00",
         "endTime": "2024-01-01 09:00:00"
     }
+}
+```
+
+权限错误示例：
+```json
+{
+    "success": false,
+    "message": "只有老师可以发布签到任务"
+}
+```
+
+```json
+{
+    "success": false,
+    "message": "您只能为自己所在的班级发布签到任务"
+}
+```
+
+参数错误示例：
+```json
+{
+    "success": false,
+    "message": "任务名称、班级、开始时间和结束时间不能为空"
+}
+```
+
+```json
+{
+    "success": false,
+    "message": "选择的班级不存在"
+}
+```
+
+```json
+{
+    "success": false,
+    "message": "开始时间必须早于结束时间"
+}
+```
+
+```json
+{
+    "success": false,
+    "message": "结束时间必须晚于当前时间"
 }
 ```
 

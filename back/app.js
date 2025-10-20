@@ -546,6 +546,26 @@ app.post('/api/attendance-task', requireLogin, async (req, res) => {
                 });
             }
 
+            // 验证教师是否有权限为该班级发布签到任务
+            const [teacherRows] = await connection.execute(
+                'SELECT classId FROM user WHERE id = ? AND userRole = ?',
+                [teacherId, 'teacher']
+            );
+            if (teacherRows.length === 0) {
+                return res.status(403).json({
+                    success: false,
+                    message: '教师信息不存在'
+                });
+            }
+
+            const teacherClassId = teacherRows[0].classId;
+            if (teacherClassId !== parseInt(classId)) {
+                return res.status(403).json({
+                    success: false,
+                    message: '您只能为自己所在的班级发布签到任务'
+                });
+            }
+
             // 创建签到任务
             const [result] = await connection.execute(
                 'INSERT INTO attendance_task (taskName, teacherId, classId, startTime, endTime) VALUES (?, ?, ?, ?, ?)',
