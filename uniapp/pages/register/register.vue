@@ -17,8 +17,11 @@
 			<input class="uni-input account" focus placeholder="请输入用户名" v-model="username_value" />
 		</view>
 		<view class="classid_box">
-			<view class="text">班级ID</view>
-			<input class="uni-input account" focus placeholder="请输入班级ID" v-model="classid_value" />
+			<view class="text">选择班级:</view>
+			<!-- <input class="uni-input account" focus placeholder="请输入班级ID" v-model="classid_value" /> -->
+			<picker :value="index" :range="classArray" class="pickerbox" @change="pickerClick">
+				<view class="uni-input">{{classArray[index]}}</view>
+			</picker>
 		</view>
 		<button size="default" @click="register_click" class="register_button">注册</button>
 		<view class="login_box">
@@ -36,14 +39,18 @@
 	const username_value=ref();
 	const account_value=ref();
 	const password_value=ref();
-	const classid_value=ref();
+	// const classid_value=ref();
 	const password_again_value=ref();
 	const register_url=computed(()=> 'http://'+ip.value+'/api/register');
-	
+	const classInfo=ref([{'id':1,'className':'软件231','classCode':'CS2023-1'}]);
+	const index=ref(0);
+	const classArray = computed(() => classInfo.value.map(item => item.className));
+	// const array=ref(['1','2','3']);
 	
 	onLoad(()=>{
 		screenHeight.value=uni.getSystemInfoSync().windowHeight;
 		get_ip();
+		getClass();
 	})
 	
 	function login_click()
@@ -66,14 +73,6 @@
 		{
 			uni.showToast({
 			    title: '密码不能为空',
-			    icon: 'error'
-			});
-			return true;
-		}
-		else if(!classid_value.value)
-		{
-			uni.showToast({
-			    title: '班级ID不能为空',
 			    icon: 'error'
 			});
 			return true;
@@ -108,9 +107,9 @@
 			mask:true
 		})
 		uni.request({
-		    url: register_url.value, // 
+		    url: register_url.value, 
 		    method: 'POST',
-			data:{"userAccount":account_value.value,"userPassword":password_value.value,"userName":username_value.value,"classId":classid_value.value},
+			data:{"userAccount":account_value.value,"userPassword":password_value.value,"userName":username_value.value,"classId":index.value+1},
 		    success: (res) => {
 				if(res.data.success)
 				{
@@ -142,6 +141,7 @@
 			}
 		});
 	}
+	
 	function get_ip()
 	{
 		uni.getStorage({
@@ -151,6 +151,36 @@
 				ip.value=res.data;
 			}
 		});
+	}
+	
+	function getClass() //获取班级列表
+	{
+		uni.request({
+		    url: 'http://'+ip.value+'/api/classes', // 
+		    method: 'GET',
+		    success: (res) => {
+				if(res.data.success)
+				{
+					classInfo.value=res.data.data;
+					console.log('获取班级列表成功');
+				}
+				else
+				{
+					console.log('获取班级列表失败')
+				}
+		    },
+			
+		    fail: (err) => {
+				console.log('获取班级列表失败')
+				}
+		});
+				
+	}
+	
+	function pickerClick(e,x)
+	{
+		console.log(e);
+		index.value=e.detail.value;
 	}
 </script>
 
@@ -203,6 +233,9 @@
 			align-items: center;
 			font-size: 35rpx;
 			color: gray;
+		}
+		.pickerbox{
+			margin-left: 10rpx;
 		}
 	}
 </style>
