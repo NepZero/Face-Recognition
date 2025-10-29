@@ -15,6 +15,10 @@
  * 注意：人脸特征值由算法组保存，后端只负责传递图片
  */
 
+const fs = require('fs');
+const path = require('path');
+
+
 const express = require('express');
 // const { formidable } = require('formidable');
 const multer = require('multer');
@@ -305,11 +309,8 @@ app.post('/api/face-register', upload.single('imagefile'), async (req, res) => {
         // TODO: 调用算法组接口进行人脸特征提取和保存
         // 算法组负责保存人脸特征值，后端只传递图片
         try {
-            // TODO: 替换为真实的算法组接口地址
-            const algorithmResponse = await axios.post('http://algorithm-service/api/face-register', {
-                imagePath: req.file.path,
-                userId: userId
-            });
+            const mockData = fs.readFileSync(path.join(__dirname, 'algorithm_mock', 'face-register.json'), 'utf-8');
+			const algorithmResponse = { data: JSON.parse(mockData) };
 
             if (algorithmResponse.data.success) {
                 // 更新用户的人脸注册状态
@@ -368,10 +369,9 @@ app.post('/api/face-recognition', upload.single('imagefile'), async (req, res) =
 
         // TODO: 调用算法组接口进行人脸识别
         try {
-            // TODO: 替换为真实的算法组接口地址
-            const algorithmResponse = await axios.post('http://algorithm-service/api/face-recognition', {
-                imagePath: req.file.path
-            });
+            const mockData = fs.readFileSync(path.join(__dirname, 'algorithm_mock', 'face-recognition.json'), 'utf-8');
+			const algorithmResponse = { data: JSON.parse(mockData) };
+
 
             const recognitionResult = algorithmResponse.data;
 
