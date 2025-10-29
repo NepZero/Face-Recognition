@@ -30,6 +30,15 @@
 }
 ```
 
+**字段类型：**
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| userAccount | string | 是 | 3-20 位，字母/数字/下划线 |
+| userPassword | string | 是 | 6-20 位，需包含字母和数字 |
+| userName | string | 否 | 最多 50 字符 |
+| classId | number | 是 | 目标班级 ID |
+
 **功能说明：**
 - 只支持学生注册，角色固定为 `student`
 - 学生注册时必须选择班级
@@ -56,6 +65,18 @@
     }
 }
 ```
+
+**响应字段类型：**
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| success | boolean | 是否成功 |
+| message | string | 提示信息 |
+| data.userId | number | 新用户 ID |
+| data.userAccount | string | 账号 |
+| data.userName | string | 姓名 |
+| data.userRole | string | 角色：student |
+| data.classId | number | 班级 ID |
 
 校验失败示例：
 ```json
@@ -84,6 +105,13 @@
 }
 ```
 
+**字段类型：**
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| userAccount | string | 是 | 登录账号 |
+| userPassword | string | 是 | 登录密码 |
+
 **响应示例：**
 
 学生登录成功：
@@ -102,6 +130,19 @@
 }
 ```
 
+**响应字段类型：**
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| success | boolean | 是否成功 |
+| message | string | 提示信息 |
+| data.userId | number | 用户 ID |
+| data.userAccount | string | 账号 |
+| data.userName | string | 姓名 |
+| data.userRole | string | 角色：student/teacher |
+| data.classId | number | 班级 ID |
+| data.faceRegistered | number | 是否注册人脸：0/1 |
+
 老师登录成功：
 ```json
 {
@@ -118,6 +159,8 @@
 }
 ```
 
+（字段类型同上）
+
 **注意**：登录成功后，系统会自动创建Session，浏览器会保存Session Cookie，后续请求会自动携带，无需手动处理认证信息。
 
 ## 3. 用户登出接口
@@ -133,6 +176,13 @@
     "message": "登出成功"
 }
 ```
+
+**响应字段类型：**
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| success | boolean | 是否成功 |
+| message | string | 提示信息 |
 
 **注意**：登出后Session会被销毁，需要重新登录才能访问需要认证的接口。
 
@@ -160,6 +210,19 @@
 }
 ```
 
+**响应字段类型：**
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| success | boolean | 是否成功 |
+| message | string | 提示信息 |
+| data.userId | number | 用户 ID |
+| data.userAccount | string | 账号 |
+| data.userName | string | 姓名 |
+| data.userRole | string | 角色 |
+| data.classId | number | 班级 ID |
+| data.faceRegistered | number | 是否注册人脸：0/1 |
+
 未登录：
 ```json
 {
@@ -168,7 +231,7 @@
 }
 ```
 
-## 5. 人脸注册接口(暂时无法使用，需等待算法组接口开发)
+## 5. 人脸注册接口（已对接算法，自动保存样本并重训练）
 
 **接口地址：** `POST /api/face-register`
 
@@ -178,18 +241,83 @@
 - `userId`: 用户ID（必需）
 - `imagefile`: 人脸图片文件（必需）
 
+**字段类型：**
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| userId | number | 是 | 待注册的用户 ID |
+| imagefile | file | 是 | 字段名固定为 `imagefile`，人脸图片（二进制，<= 20MB） |
+
 **响应示例：**
+
+首次注册（冷启动）：
+```json
+{
+    "success": true,
+    "message": "人脸注册成功（首次注册）",
+    "data": {
+        "userId": 1,
+        "savedToDataset": true,
+        "retrained": true,
+        "coldStart": true
+    }
+}
+```
+
+非首次注册（已有人脸记录）：
 ```json
 {
     "success": true,
     "message": "人脸注册成功",
     "data": {
-        "userId": 1
+        "userId": 1,
+        "savedToDataset": true,
+        "retrained": true,
+        "coldStart": false
     }
 }
 ```
 
-## 6. 人脸识别接口（包含自动签到）(暂时无法使用，需等待算法组接口开发)
+**响应字段说明：**
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| success | boolean | 是否成功 |
+| message | string | 提示信息 |
+| data.userId | number | 用户 ID |
+| data.savedToDataset | boolean | 是否已保存到训练集 |
+| data.retrained | boolean | 是否已重新训练 |
+| data.coldStart | boolean | 是否为首次注册（首次注册跳过识别校验） |
+
+（标准错误响应同样包含字段：success:boolean, message:string）
+
+**业务逻辑：**
+
+1. **首次注册（coldStart: true）**：
+   - 当用户 `faceRegistered=0` 时，跳过识别校验
+   - 直接将上传图片保存到训练集 `opencv/face_get/Facedata/<name>.<userId>.<timestamp>.<ext>`
+   - 立即触发训练脚本更新模型
+   - 更新用户状态为已注册
+
+2. **非首次注册（coldStart: false）**：
+   - 先调用 Python 识别脚本校验人脸
+   - 只有当识别结果与 `userId` 匹配时，才保存样本并重训练
+   - 用于追加更多训练样本，提高识别准确率
+
+**错误说明与映射：**
+- `用户不存在`：提供的 `userId` 在数据库中不存在
+- `未收到图片文件`：未携带 `imagefile` 字段或为空
+- `人脸注册失败：未识别到该用户的人脸`：非首次注册时，算法识别到的人脸与 `userId` 不一致
+- `人脸注册失败，请重试`：算法调用或解析失败（可查看后端日志的 `[Python stderr]`）
+
+**实现要点：**
+- 上传字段名必须为 `imagefile`
+- 算法使用 Python 子进程调用，必要时可通过环境变量 `PYTHON_EXE` 指定解释器路径
+- 首次注册自动跳过识别校验，直接入库并重训练
+- 非首次注册需要识别校验通过后才保存样本
+- 每次注册成功后都会触发训练脚本，更新 `face_trainer/trainer.yml`
+
+## 6. 人脸识别接口（包含自动签到，已对接算法）
 
 **接口地址：** `POST /api/face-recognition`
 
@@ -202,6 +330,14 @@
 
 **请求参数：**
 - `imagefile`: 待识别的人脸图片文件（必需）
+ - `taskId`: 签到任务ID（可选）
+
+**字段类型：**
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| imagefile | file | 是 | 字段名固定为 `imagefile`，待识别人脸图片（二进制，<= 20MB） |
+| taskId | number | 否 | 若提供，则在有效时间窗内自动签到 |
 
 **响应示例：**
 
@@ -220,6 +356,19 @@
 }
 ```
 
+**响应字段类型（识别成功）：**
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| success | boolean | 是否成功 |
+| message | string | 提示信息 |
+| data.recognized | boolean | 是否识别到已知人脸 |
+| data.userId | number | 用户 ID |
+| data.userAccount | string | 账号 |
+| data.userName | string | 姓名 |
+| data.attendanceRecorded | boolean | 是否记录签到 |
+| data.taskId | number/null | 绑定的任务 ID |
+
 识别失败：
 ```json
 {
@@ -231,6 +380,17 @@
     }
 }
 ```
+
+**响应字段类型（识别失败）：** 同上，但 `data.recognized=false`，无用户信息，`attendanceRecorded=false`。
+
+**错误说明与映射：**
+- `未收到图片文件`：未携带 `imagefile` 字段或为空
+- `用户信息查询失败`：算法识别出的 `userId` 在数据库不存在
+- `人脸识别失败`：算法调用或解析失败（可查看后端日志的 `[Python stderr]`）
+
+**实现要点：**
+- 若提供 `taskId`，后端将校验任务属于该用户班级、状态为 active 且在有效时间窗内
+- 校验通过自动写入 `attendance_record`，失败仅影响 `attendanceRecorded` 字段，不影响识别结果返回
 
 **业务逻辑：**
 1. 接收人脸图片文件
@@ -261,16 +421,26 @@
         {
             "id": 1,
             "className": "计算机科学与技术2023级1班",
-            "classCode": "CS2021-1"
+            "classCode": "CS2023-1"
         },
         {
             "id": 2,
             "className": "计算机科学与技术2023级2班",
-            "classCode": "CS2021-2"
+            "classCode": "CS2023-2"
         }
     ]
 }
 ```
+
+**响应字段类型（列表项）：**
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| success | boolean | 是否成功 |
+| message | string | 提示信息 |
+| data[].id | number | 班级 ID |
+| data[].className | string | 班级名称 |
+| data[].classCode | string | 班级编码 |
 
 ## 8. 老师发布签到任务接口
 
@@ -287,6 +457,15 @@
     "endTime": "2024-01-01 09:00:00"
 }
 ```
+
+**字段类型：**
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| taskName | string | 是 | 最多 100 字符 |
+| classId | number | 是 | 老师所属班级 ID |
+| startTime | string(datetime) | 是 | 开始时间，YYYY-MM-DD HH:mm:ss |
+| endTime | string(datetime) | 是 | 结束时间，需晚于开始时间 |
 
 **参数说明：**
 - `taskName`: 签到任务名称，最多100字符
@@ -318,6 +497,18 @@
     }
 }
 ```
+
+**响应字段类型：**
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| success | boolean | 是否成功 |
+| message | string | 提示信息 |
+| data.taskId | number | 新任务 ID |
+| data.taskName | string | 任务名 |
+| data.classId | number | 班级 ID |
+| data.startTime | string(datetime) | 开始时间 |
+| data.endTime | string(datetime) | 结束时间 |
 
 权限错误示例：
 ```json
@@ -373,6 +564,13 @@
 - `status`: 可选，任务状态筛选（active/inactive/completed）
 - `classId`: 可选，班级ID筛选（仅老师可用）
 
+**字段类型：**
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| status | string | 否 | active/inactive/completed |
+| classId | number | 否 | 仅老师可用的筛选条件 |
+
 **功能说明：**
 - 老师：查看自己发布的任务
 - 学生：查看自己班级的任务
@@ -398,6 +596,22 @@
 }
 ```
 
+**响应字段类型（列表项）：**
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| success | boolean | 是否成功 |
+| message | string | 提示信息 |
+| data[].id | number | 任务 ID |
+| data[].taskName | string | 任务名 |
+| data[].teacherId | number | 发布老师 ID |
+| data[].classId | number | 班级 ID |
+| data[].startTime | string(datetime) | 开始时间 |
+| data[].endTime | string(datetime) | 结束时间 |
+| data[].status | string | 任务状态 |
+| data[].className | string | 班级名 |
+| data[].teacherName | string | 老师名 |
+
 ## 10. 获取签到统计接口
 
 **接口地址：** `GET /api/attendance-stats`
@@ -406,6 +620,12 @@
 
 **请求参数：**
 - `taskId`: 签到任务ID（必需）
+
+**字段类型：**
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| taskId | number | 是 | 目标签到任务 ID |
 
 **功能说明：** 获取指定签到任务的统计信息，包括签到率、学生详情等
 
@@ -437,6 +657,26 @@
     }
 }
 ```
+
+**响应字段类型：**
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| success | boolean | 是否成功 |
+| message | string | 提示信息 |
+| data.task.id | number | 任务 ID |
+| data.task.taskName | string | 任务名 |
+| data.task.classId | number | 班级 ID |
+| data.task.startTime | string(datetime) | 开始时间 |
+| data.task.endTime | string(datetime) | 结束时间 |
+| data.task.status | string | 任务状态 |
+| data.totalStudents | number | 班级总人数 |
+| data.checkedStudents | number | 已签到人数 |
+| data.attendanceRate | string | 百分比字符串 |
+| data.details[].userName | string | 学生姓名 |
+| data.details[].userAccount | string | 学号/账号 |
+| data.details[].checkTime | string(datetime) | 签到时间 |
+| data.details[].status | number | 签到状态（1成功） |
 
 ## 预置数据
 
