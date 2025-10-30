@@ -44,9 +44,9 @@ setx PYTHON_EXE "C:\\Program Files\\Python311\\python.exe"
 
 ## 3. 训练与识别脚本约定
 
-### 3.1 训练脚本（一次性/按需）
+### 3.1 训练脚本（一次性/按需：支持离线与在线触发）
 
-- 命令：在 `opencv/face_get/` 目录运行
+- 离线命令：在 `opencv/face_get/` 目录运行
 
 ```powershell
 cd opencv/face_get
@@ -57,6 +57,7 @@ py -3 trainner.py
   - `id` 必须与数据库中用户表 `user.id` 一致
   - 例如：`gpt.6.1.jpg` 表示 name=gpt, id=6
 - 输出：`face_trainer/trainer.yml`
+- 在线触发：后端在“人脸注册”成功路径会调用训练脚本，自动更新 `trainer.yml`（参考 `back/app.js` 的 `runPythonTraining()`）
 
 ### 3.2 实时识别脚本（后端调用）
 
@@ -126,7 +127,7 @@ py -3 opencv/face_get/rec.py <image_abs_path>
   - `gpt.6.1.jpg`、`gpt.6.2.jpg`、`gpt.6.3.jpg` → 用户 ID = 6
   - `zhangsan.1.1.jpg`、`zhangsan.1.2.jpg` → 用户 ID = 1
 
-### 训练与后端的联通关系
+### 训练与后端的联通关系（离线与在线并存）
 
 1. **数据对齐是核心**
    - 训练集中图片文件名的 `id` 必须与数据库 `user` 表的 `id` 字段一致
@@ -134,13 +135,13 @@ py -3 opencv/face_get/rec.py <image_abs_path>
      - 人脸注册接口：返回“未识别到该用户的人脸”（即使识别成功）
      - 人脸识别接口：返回“用户信息查询失败”
 
-2. **训练是离线操作**
-   - `trainner.py` 不直接调用后端接口或数据库
+2. **训练既可离线，也可由后端在线触发**
+   - `trainner.py` 不访问后端接口或数据库（无状态），但可由后端以子进程方式触发
    - 训练时机：
-     - **初始部署**：在部署前完成训练，将 `trainer.yml` 一并部署
-     - **新增用户**：当数据库新增用户后，需：
-       1. 将该用户的人脸样本放入 `Facedata/`，命名规则：`name.<新用户id>.index.jpg`
-       2. 重新运行 `trainner.py`，更新 `trainer.yml`
+     - 初始部署（离线）：部署前离线产出 `trainer.yml`
+     - 首次注册（在线冷启动）：后端保存首张样本后立即触发训练
+     - 非首次注册（在线追加）：识别校验通过后保存样本并触发训练
+     - 批量新增用户（离线）：集中放样本后手动运行 `trainner.py`
 
 3. **识别脚本的联通桥梁**
    - `rec.py` 在运行时：
