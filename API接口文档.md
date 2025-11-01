@@ -237,6 +237,15 @@
 
 **请求方式：** `multipart/form-data`
 
+**权限要求：** 无需登录（但建议在生产环境添加认证）
+
+**行为摘要：**
+- 接收用户上传的人脸图片
+- 根据用户 `faceRegistered` 状态决定是否进行识别校验
+- 首次注册（冷启动）：跳过识别，直接保存样本并触发训练
+- 非首次注册：先识别校验，通过后保存样本并触发训练
+- 自动更新数据库 `user.faceRegistered=1`
+
 **请求参数：**
 - `userId`: 用户ID（必需）
 - `imagefile`: 人脸图片文件（必需）
@@ -245,7 +254,7 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| userId | number | 是 | 待注册的用户 ID |
+| userId | number | 是 | 待注册的用户 ID，必须与数据库 `user.id` 一致 |
 | imagefile | file | 是 | 字段名固定为 `imagefile`，人脸图片（二进制，<= 20MB） |
 
 **响应示例：**
@@ -285,37 +294,94 @@
 | success | boolean | 是否成功 |
 | message | string | 提示信息 |
 | data.userId | number | 用户 ID |
-| data.savedToDataset | boolean | 是否已保存到训练集 |
-| data.retrained | boolean | 是否已重新训练 |
+| data.savedToDataset | boolean | 是否已保存到训练集 `Facedata/` |
+| data.retrained | boolean | 是否已重新训练（更新 `trainer.yml`） |
 | data.coldStart | boolean | 是否为首次注册（首次注册跳过识别校验） |
 
-（标准错误响应同样包含字段：success:boolean, message:string）
+**状态码说明：**
+
+| HTTP 状态码 | 场景 | 响应示例 |
+| --- | --- | --- |
+| 200 | 注册成功 | `{ "success": true, "message": "人脸注册成功", "data": {...} }` |
+| 400 | 参数错误 | `{ "success": false, "message": "用户ID不能为空" }` |
+| 400 | 非首次注册识别失败 | `{ "success": false, "message": "人脸注册失败：未识别到该用户的人脸" }` |
+| 404 | 用户不存在 | `{ "success": false, "message": "用户不存在" }` |
+| 500 | 服务器错误 | `{ "success": false, "message": "人脸注册失败，请重试" }` |
+
+**错误说明与映射：**
+
+| 错误信息 | HTTP 状态码 | 可能原因 | 解决方案 |
+| --- | --- | --- | --- |
+| `用户ID不能为空` | 400 | 未提供 `userId` 字段 | 在 `formData` 中携带 `userId` |
+| `未收到图片文件` | 400 | `imagefile` 字段缺失或为空 | 检查前端上传代码，确保字段名为 `imagefile` |
+| `用户不存在` | 404 | 提供的 `userId` 在数据库不存在 | 验证用户 ID，确保数据库中存在该用户 |
+| `人脸注册失败：未识别到该用户的人脸` | 400 | 非首次注册时，算法识别出的人脸 ID 与提交的 `userId` 不一致 | 1. 检查训练集文件名的 `id` 是否与数据库对齐<br>2. 确认上传的图片确实是该用户的人脸<br>3. 重新训练模型 |
+| `人脸注册失败，请重试` | 500 | Python 脚本调用失败或解析错误 | 查看后端日志的 `[Python stderr]`，检查 Python 环境和依赖 |
 
 **业务逻辑：**
 
 1. **首次注册（coldStart: true）**：
-   - 当用户 `faceRegistered=0` 时，跳过识别校验
+   - 当用户 `faceRegistered=0` 时，跳过识别校验（冷启动）
    - 直接将上传图片保存到训练集 `opencv/face_get/Facedata/<name>.<userId>.<timestamp>.<ext>`
-   - 立即触发训练脚本更新模型
-   - 更新用户状态为已注册
+   - 立即触发训练脚本 `trainner.py`，更新模型 `face_trainer/trainer.yml`
+   - 更新数据库：`UPDATE user SET faceRegistered=1 WHERE id=?`
+   - 返回成功响应（`coldStart: true`）
 
 2. **非首次注册（coldStart: false）**：
-   - 先调用 Python 识别脚本校验人脸
-   - 只有当识别结果与 `userId` 匹配时，才保存样本并重训练
+   - 先调用 Python 识别脚本 `rec.py` 进行人脸识别校验
+   - 只有当识别结果 `recognized=true` 且 `返回的 userId == 入参 userId` 时，才保存样本并重训练
    - 用于追加更多训练样本，提高识别准确率
-
-**错误说明与映射：**
-- `用户不存在`：提供的 `userId` 在数据库中不存在
-- `未收到图片文件`：未携带 `imagefile` 字段或为空
-- `人脸注册失败：未识别到该用户的人脸`：非首次注册时，算法识别到的人脸与 `userId` 不一致
-- `人脸注册失败，请重试`：算法调用或解析失败（可查看后端日志的 `[Python stderr]`）
+   - 若识别失败或不匹配，返回 400 错误，防止误将他人照片加入训练集
 
 **实现要点：**
-- 上传字段名必须为 `imagefile`
+- 上传字段名必须为 `imagefile`（与后端 `upload.single('imagefile')` 对应）
 - 算法使用 Python 子进程调用，必要时可通过环境变量 `PYTHON_EXE` 指定解释器路径
-- 首次注册自动跳过识别校验，直接入库并重训练
-- 非首次注册需要识别校验通过后才保存样本
+- 首次注册自动跳过识别校验，直接入库并重训练（适合初始部署场景）
+- 非首次注册需要识别校验通过后才保存样本（防止数据污染）
 - 每次注册成功后都会触发训练脚本，更新 `face_trainer/trainer.yml`
+- 训练脚本触发机制：
+  - **离线训练**：部署前手动运行 `py -3 opencv/face_get/trainner.py`
+  - **在线训练**：注册接口成功后自动调用 `runPythonTraining()`（子进程执行 `trainner.py`）
+
+**训练与识别脚本的离线与在线触发机制：**
+
+1. **离线训练**（初始部署）：
+   - 在部署前，手动准备训练数据到 `Facedata/` 目录
+   - 运行命令：`py -3 opencv/face_get/trainner.py`
+   - 生成初始 `trainer.yml` 模型文件
+   - 部署时将该模型文件一并打包
+
+2. **在线训练**（运行时自动触发）：
+   - 每次人脸注册成功后，后端自动调用 `runPythonTraining()`
+   - 该函数通过子进程执行 `trainner.py`，更新模型
+   - 识别脚本 `rec.py` 每次调用时读取最新的 `trainer.yml`
+
+**数据命名规则与触发时机：**
+
+- **训练数据命名规则**：`<name>.<id>.<index>.<ext>`
+  - `name`：用户名称（便于识别，仅用于辅助）
+  - `id`：**必须与数据库 `user.id` 完全一致**（这是联通的关键）
+  - `index`：时间戳或序号（用于区分同一用户的多张样本）
+  - `ext`：图片扩展名（`.jpg`, `.jpeg`, `.png`）
+  - 示例：`gpt.6.1759567764706.jpg` 表示用户 ID=6
+
+- **触发时机**：
+  - **首次注册**：注册接口检测到 `faceRegistered=0`，直接保存样本并触发训练
+  - **非首次注册**：注册接口检测到 `faceRegistered=1`，先识别校验，通过后保存样本并触发训练
+  - **新增用户后识别不到**：需手动将用户的人脸样本放入 `Facedata/` 并重新训练
+
+**数据对齐的重要性：**
+
+- **核心原则**：训练集文件名中的 `id` 必须与数据库 `user.id` 一致
+- **对齐流程**：
+  1. 数据库中新增用户，获得 `user.id`（如 6）
+  2. 将用户的人脸样本命名为 `name.6.index.jpg`，放入 `Facedata/`
+  3. 运行训练脚本生成/更新 `trainer.yml`
+  4. 识别时，算法返回 `userId=6`，后端通过 `WHERE id=6` 查询用户信息
+- **数据不一致的后果**：
+  - 识别出的 `userId` 无法在数据库中匹配到用户
+  - 人脸注册接口返回"未识别到该用户的人脸"（即使识别成功）
+  - 人脸识别接口返回"用户信息查询失败"
 
 ## 6. 人脸识别接口（包含自动签到，已对接算法）
 
@@ -323,21 +389,30 @@
 
 **请求方式：** `multipart/form-data`
 
+**权限要求：** 无需登录（但建议在生产环境添加认证）
+
+**行为摘要：**
+- 接收上传的人脸图片
+- 调用 Python 识别脚本 `rec.py` 进行人脸识别
+- 识别成功后查询用户信息
+- 若提供 `taskId` 且任务有效，自动写入签到记录
+- 返回识别结果与签到状态
+
 **功能说明：**
 - 上传人脸图片进行识别
-- 识别成功后自动记录签到
+- 识别成功后自动记录签到（如果提供了有效的 `taskId`）
 - 返回用户信息和签到状态
 
 **请求参数：**
 - `imagefile`: 待识别的人脸图片文件（必需）
- - `taskId`: 签到任务ID（可选）
+- `taskId`: 签到任务ID（可选）
 
 **字段类型：**
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | imagefile | file | 是 | 字段名固定为 `imagefile`，待识别人脸图片（二进制，<= 20MB） |
-| taskId | number | 否 | 若提供，则在有效时间窗内自动签到 |
+| taskId | number | 否 | 若提供，则在有效时间窗内自动签到（任务需属于用户班级且状态为 active） |
 
 **响应示例：**
 
@@ -383,26 +458,62 @@
 
 **响应字段类型（识别失败）：** 同上，但 `data.recognized=false`，无用户信息，`attendanceRecorded=false`。
 
-**错误说明与映射：**
-- `未收到图片文件`：未携带 `imagefile` 字段或为空
-- `用户信息查询失败`：算法识别出的 `userId` 在数据库不存在
-- `人脸识别失败`：算法调用或解析失败（可查看后端日志的 `[Python stderr]`）
+**状态码说明：**
 
-**实现要点：**
-- 若提供 `taskId`，后端将校验任务属于该用户班级、状态为 active 且在有效时间窗内
-- 校验通过自动写入 `attendance_record`，失败仅影响 `attendanceRecorded` 字段，不影响识别结果返回
+| HTTP 状态码 | 场景 | 响应示例 |
+| --- | --- | --- |
+| 200 | 识别成功或失败（正常响应） | `{ "success": true, "message": "人脸识别成功，已自动签到", "data": {...} }` |
+| 200 | 未识别到已知人脸（正常响应） | `{ "success": true, "message": "未识别到已知人脸", "data": { "recognized": false } }` |
+| 400 | 参数错误 | `{ "success": false, "message": "未收到图片文件" }` |
+| 500 | 服务器错误 | `{ "success": false, "message": "用户信息查询失败" }` |
+| 500 | 算法调用失败 | `{ "success": false, "message": "人脸识别失败", "error": "..." }` |
+
+**错误说明与映射：**
+
+| 错误信息 | HTTP 状态码 | 可能原因 | 解决方案 |
+| --- | --- | --- | --- |
+| `未收到图片文件` | 400 | `imagefile` 字段缺失或为空 | 检查前端上传代码，确保字段名为 `imagefile` |
+| `用户信息查询失败` | 500 | 算法识别出的 `userId` 在数据库不存在 | 1. 检查训练集文件名的 `id` 是否与数据库对齐<br>2. 确认数据库中是否存在该用户<br>3. 重新训练模型 |
+| `人脸识别失败` | 500 | Python 脚本调用失败或解析错误 | 查看后端日志的 `[Python stderr]`，检查 Python 环境和依赖 |
 
 **业务逻辑：**
-1. 接收人脸图片文件
-2. 调用算法组接口进行人脸识别
-3. 如果识别成功：
-   - 查询用户详细信息
-   - 验证签到任务（如果提供了taskId）
-   - 自动记录签到到数据库
-   - 返回用户信息和签到状态
-4. 如果识别失败：
-   - 返回未识别信息
+
+1. **接收与保存**：
+   - 接收 `multipart/form-data` 请求
+   - multer 保存文件到 `back/public/imagefile-<timestamp>-<rand>.<ext>`
+   - 生成图片绝对路径
+
+2. **调用识别算法**：
+   - 后端调用 `runPythonRecognition(absImagePath)`
+   - Python 子进程执行：`py -3 opencv/face_get/rec.py <图片路径>`
+   - `rec.py` 读取 `trainer.yml`，进行 LBPH 人脸识别
+   - 从 stdout 返回 JSON：`{"recognized": true, "userId": 6, "userName": "gpt"}` 或 `{"recognized": false}`
+
+3. **识别成功处理**：
+   - 若 `recognized=true`，查询数据库获取用户信息：`SELECT * FROM user WHERE id = ?`
+   - 若用户不存在，返回 500 "用户信息查询失败"
+   - 若提供了 `taskId`，校验签到任务：
+     - 查询任务：`SELECT * FROM attendance_task WHERE id = ? AND classId = ? AND status='active' AND startTime<=NOW() AND endTime>=NOW()`
+     - 若任务有效，自动写入签到记录：`INSERT INTO attendance_record (userId, taskId, checkTime, status) VALUES (?, ?, NOW(), 1)`
+     - 若任务无效，`attendanceRecorded=false`（不影响识别成功响应）
+
+4. **识别失败处理**：
+   - 若 `recognized=false`，返回 `{"recognized": false, "attendanceRecorded": false}`
    - 不进行签到记录
+
+**实现要点：**
+- 上传字段名必须为 `imagefile`（与后端 `upload.single('imagefile')` 对应）
+- 算法使用 Python 子进程调用，必要时可通过环境变量 `PYTHON_EXE` 指定解释器路径
+- 若提供 `taskId`，后端将校验任务属于该用户班级、状态为 active 且在有效时间窗内
+- 校验通过自动写入 `attendance_record`，失败仅影响 `attendanceRecorded` 字段，不影响识别结果返回
+- 识别失败（`recognized=false`）不是错误，正常返回 200 状态码
+
+**前端集成要点：**
+- 使用 `multipart/form-data` 格式
+- 字段名必须为 `imagefile`（固定，不能修改）
+- 文件大小限制：<= 20MB
+- 支持格式：`.jpg`, `.jpeg`, `.png`
+- `taskId` 为可选参数，number 类型
 
 ## 7. 获取班级列表接口
 
