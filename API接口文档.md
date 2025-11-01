@@ -317,22 +317,6 @@
 - 非首次注册需要识别校验通过后才保存样本
 - 每次注册成功后都会触发训练脚本，更新 `face_trainer/trainer.yml`
 
-**后端行为摘要：**
-- 保存上传文件到 `back/public/`（随机文件名）
-- 生成并复制到训练集的规范文件名：`<baseName>.<userId>.<timestamp>.<ext>`，其中 `baseName` 来源于账号/姓名（做过字符清洗）
-- 训练触发：首次注册直接重训；非首次在识别校验通过后重训
-
-**状态码与错误说明：**
-- 200：成功（首次/非首次）
-- 400：缺少 `userId`/`imagefile`，或非首次注册时识别不匹配
-- 404：用户不存在
-- 500：算法调用异常或解析失败
-
-**前端集成要点：**
-- 必须使用 `multipart/form-data`，文件字段名为 `imagefile`
-- `userId` 必须为数据库真实存在的用户 ID
-- 建议在成功后刷新用户信息，读取 `faceRegistered` 状态
-
 ## 6. 人脸识别接口（包含自动签到，已对接算法）
 
 **接口地址：** `POST /api/face-recognition`
@@ -419,21 +403,6 @@
 4. 如果识别失败：
    - 返回未识别信息
    - 不进行签到记录
-
-**后端行为摘要：**
-- 保存上传文件到 `back/public/`
-- 调用 Python 识别当前图片，解析 stdout JSON（需包含 `recognized`，识别成功时包含 `userId`）
-- 若 `recognized=true`：查询用户信息；如带 `taskId`，校验任务有效性（班级、状态、时间窗）并自动入库签到记录
-
-**状态码与错误说明：**
-- 200：识别成功或失败均返回 200（但 `data.recognized` 区分识别结果）
-- 400：缺少 `imagefile`
-- 500：算法调用或解析失败；或识别到的 `userId` 在数据库不存在
-
-**前端集成要点：**
-- 必须使用 `multipart/form-data`，文件字段名为 `imagefile`
-- 若需自动签到，附带有效 `taskId`（与该学生的 `classId` 匹配，时间在有效窗，状态为 `active`）
-- 成功响应内会返回 `attendanceRecorded` 指示是否写入签到
 
 ## 7. 获取班级列表接口
 

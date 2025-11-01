@@ -44,9 +44,9 @@ setx PYTHON_EXE "C:\\Program Files\\Python311\\python.exe"
 
 ## 3. 训练与识别脚本约定
 
-### 3.1 训练脚本（一次性/按需：支持离线与在线触发）
+### 3.1 训练脚本（一次性/按需）
 
-- 离线命令：在 `opencv/face_get/` 目录运行
+- 命令：在 `opencv/face_get/` 目录运行
 
 ```powershell
 cd opencv/face_get
@@ -57,7 +57,6 @@ py -3 trainner.py
   - `id` 必须与数据库中用户表 `user.id` 一致
   - 例如：`gpt.6.1.jpg` 表示 name=gpt, id=6
 - 输出：`face_trainer/trainer.yml`
-- 在线触发：后端在“人脸注册”成功路径会调用训练脚本，自动更新 `trainer.yml`（参考 `back/app.js` 的 `runPythonTraining()`）
 
 ### 3.2 实时识别脚本（后端调用）
 
@@ -127,7 +126,7 @@ py -3 opencv/face_get/rec.py <image_abs_path>
   - `gpt.6.1.jpg`、`gpt.6.2.jpg`、`gpt.6.3.jpg` → 用户 ID = 6
   - `zhangsan.1.1.jpg`、`zhangsan.1.2.jpg` → 用户 ID = 1
 
-### 训练与后端的联通关系（离线与在线并存）
+### 训练与后端的联通关系
 
 1. **数据对齐是核心**
    - 训练集中图片文件名的 `id` 必须与数据库 `user` 表的 `id` 字段一致
@@ -135,13 +134,13 @@ py -3 opencv/face_get/rec.py <image_abs_path>
      - 人脸注册接口：返回“未识别到该用户的人脸”（即使识别成功）
      - 人脸识别接口：返回“用户信息查询失败”
 
-2. **训练既可离线，也可由后端在线触发**
-   - `trainner.py` 不访问后端接口或数据库（无状态），但可由后端以子进程方式触发
+2. **训练是离线操作**
+   - `trainner.py` 不直接调用后端接口或数据库
    - 训练时机：
-     - 初始部署（离线）：部署前离线产出 `trainer.yml`
-     - 首次注册（在线冷启动）：后端保存首张样本后立即触发训练
-     - 非首次注册（在线追加）：识别校验通过后保存样本并触发训练
-     - 批量新增用户（离线）：集中放样本后手动运行 `trainner.py`
+     - **初始部署**：在部署前完成训练，将 `trainer.yml` 一并部署
+     - **新增用户**：当数据库新增用户后，需：
+       1. 将该用户的人脸样本放入 `Facedata/`，命名规则：`name.<新用户id>.index.jpg`
+       2. 重新运行 `trainner.py`，更新 `trainer.yml`
 
 3. **识别脚本的联通桥梁**
    - `rec.py` 在运行时：
@@ -529,156 +528,3 @@ uni.uploadFile({
 
 
 
-
-## 13. 环境与配置（一页纸总览）
-
-- 运行环境：Windows 10/11，Node.js 18+，Python 3.10/3.11，MySQL 8.x
-- 项目根目录：`F:\code\faceRecognition\Face-Recognition`
-- 后端服务：`back/app.js`（端口 3000）
-- Python 模型与数据：`opencv/face_get/`
-- 上传目录：`back/public/`（multer 保存临时图片）
-- 训练数据目录：`opencv/face_get/Facedata/`（文件命名 `name.id.index.jpg`）
-- 模型文件：`opencv/face_get/face_trainer/trainer.yml`
-- 指定 Python 解释器（可选）：`PYTHON_EXE` 环境变量
-
-数据库配置位于后端代码中，可按本地环境修改：
-
-```46:59:back/app.js
-// MySQL数据库配置
-// 请根据实际环境修改以下配置
-const dbConfig = {
-    host: 'localhost',           // 数据库服务器地址
-    user: 'root',                // 数据库用户名
-    password: '123456',         // 数据库密码
-    database: 'face_recognition', // 数据库名称
-    charset: 'utf8mb4',          // 字符集
-    port: 3306,                  // 端口号（可选，默认3306）
-    connectionLimit: 10,          // 连接池最大连接数
-    acquireTimeout: 60000,        // 获取连接超时时间（毫秒）
-    timeout: 60000,               // 查询超时时间（毫秒）
-    reconnect: true              // 自动重连
-};
-```
-
-后端如何选择并调用 Python：
-
-```86:135:back/app.js
-// 运行 Python 实时识别并从 stdout 解析 JSON（带详细日志与多解释器兼容）
-async function runPythonRecognition(imagePath) {
-    // 支持通过环境变量覆盖 Python 解释器（如 C:\\Python39\\python.exe 或 py）
-    const envPython = process.env.PYTHON_EXE && process.env.PYTHON_EXE.trim();
-    const interpreters = [
-        envPython ? { exe: envPython, args: [] } : null,
-        { exe: 'py', args: ['-3'] },
-        { exe: 'python', args: [] },
-        { exe: 'python3', args: [] }
-    ].filter(Boolean);
-    const scriptPath = path.join(__dirname, '..', 'opencv', 'face_get', 'rec.py');
-    const cwd = path.join(__dirname, '..');
-    // ... 尝试多解释器 spawn 并解析 stdout JSON ...
-}
-```
-
-建议用法：
-- Windows 指定解释器（免多版本不确定性）：
-  ```powershell
-  setx PYTHON_EXE "C:\\Program Files\\Python311\\python.exe"
-  ```
-- Python 依赖安装：
-  ```powershell
-  py -3 -m pip install --upgrade pip
-  py -3 -m pip install opencv-contrib-python pillow numpy
-  ```
-- Node 依赖与启动：
-  ```powershell
-  cd back
-  npm install
-  npm start
-  ```
-
-
-## 14. Shell 使用注意（Windows）
-
-Windows 两种常见终端在变量与续行上的差异：
-
-- PowerShell：
-  - 变量：`$img = "C:\\path\\to\\file.jpg"`
-  - 续行：反引号 `` ` `` 或直接写成一行
-  - 示例（一行）：
-    ```powershell
-    $img="F:\\code\\faceRecognition\\Face-Recognition\\opencv\\face_get\\test\\gpt.6.2.jpg"; curl.exe -X POST http://localhost:3000/api/face-register -F "userId=5" -F "imagefile=@$img;type=image/jpeg"; curl.exe -X POST http://localhost:3000/api/face-recognition -F "imagefile=@$img;type=image/jpeg"
-    ```
-
-- cmd.exe：
-  - 变量：`set "img=C:\\path\\to\\file.jpg"`
-  - 续行：使用 `^` 并必须换行；一行用 `&&` 串联
-  - 示例（一行）：
-    ```bat
-    set "img=F:\\code\\faceRecognition\\Face-Recognition\\opencv\\face_get\\test\\gpt.6.2.jpg" && curl.exe -X POST http://localhost:3000/api/face-register -F "userId=5" -F "imagefile=@%img%;type=image/jpeg" && curl.exe -X POST http://localhost:3000/api/face-recognition -F "imagefile=@%img%;type=image/jpeg"
-    ```
-
-路径传递建议：
-- `curl -F` 时可用正斜杠 `F:/...` 或用引号包住反斜杠路径并在 `@"..."` 前加转义（cmd）。
-- 如遇 `curl: (26) Failed to open/read local data...`，优先检查文件是否存在与路径转义是否正确。
-
-
-## 15. 端到端时序（文字版时序图）
-
-人脸识别接口 `/api/face-recognition`：
-1) 前端构造 `multipart/form-data`，字段名 `imagefile`
-2) 后端 `multer` 落盘至 `back/public/<生成文件名>`
-3) 后端调用 `runPythonRecognition(<abs_path>)`
-4) Python `rec.py` 加载 `face_trainer/trainer.yml` 与 Haar 模型，检测并识别
-5) `rec.py` 输出一次 JSON 到 stdout（如 `{ recognized: true, userId: 5 }`）
-6) 后端解析 JSON → 查库 `user` →（可选）校验 `taskId` → 写签到 → 返回响应
-
-人脸注册接口 `/api/face-register`：
-1) 前端上传 `imagefile` + `userId`
-2) 首次注册（`faceRegistered=0`）：跳过识别校验，保存样本至 `Facedata`，触发训练，置位 `faceRegistered=1`
-3) 非首次：先识别校验（识别到且 `userId` 一致），再保存样本 + 触发训练
-
-
-## 16. 错误映射与排错对照（扩展版）
-
-- Python 解释器/依赖：
-  - 症状：后端日志含 `spawn ... failed` 或 `No Python interpreter found`
-  - 处理：设置 `PYTHON_EXE`；`py -3 -V` 检查；`pip install opencv-contrib-python`
-
-- Python 输出解析：
-  - 症状：`Failed to parse Python stdout as JSON`
-  - 处理：确认 `rec.py` 在“传入图片路径”模式只打印一次 JSON（本项目已保证），查看 stderr 报错根因
-
-- 训练失败：
-  - 症状：`LBPH... Empty training data` 或 识别总失败
-  - 处理：向 `Facedata` 放入至少 1 名用户、每名 1~3 张清晰正脸；命名 `name.id.index.jpg`；重跑 `trainner.py`
-
-- 用户不存在：
-  - 症状：识别成功后返回 `用户信息查询失败`
-  - 处理：保证训练集文件名中的 `id` 与数据库 `user.id` 对齐；补齐数据库用户或重训
-
-- Windows curl 上传失败：
-  - 症状：`curl: (26) Failed to open/read local data...`
-  - 处理：使用绝对路径；在 cmd 用 `%img%` 或直接硬编码路径；必要时改用正斜杠路径
-
-
-## 17. 配置项与可调参数
-
-- 超时与日志：
-  - 识别调用可按需包裹超时（`Promise.race`），当前默认不超时；日志已打印 `[Python exe]`/`stdout`/`stderr`
-- 上传限制：
-  - `multer` 目前 `fileSize` 上限 20MB（可在 `back/app.js` 的 `limits` 调整）
-- 目录与权限：
-  - `back/public`、`opencv/face_get/Facedata`、`opencv/face_get/face_trainer` 需可写
-- 解释器选择顺序：
-  - `PYTHON_EXE` → `py -3` → `python` → `python3`
-
-
-## 18. 快速验证清单（TL;DR）
-
-- [ ] `py -3 -V`、`node -v`、`mysql --version` 正常
-- [ ] `opencv-contrib-python`、`pillow`、`numpy` 安装完成
-- [ ] `Facedata` 至少有 1 名用户的样本，命名含数据库对齐的 `id`
-- [ ] `py -3 opencv/face_get/trainner.py` 产出 `face_trainer/trainer.yml`
-- [ ] `py -3 opencv/face_get/rec.py <某图片>` 输出一次 JSON
-- [ ] `npm start` 启动后端，日志可见 Python 调用与 stdout
-- [ ] `curl` 调用 `/api/face-register`、`/api/face-recognition` 成功

@@ -6,10 +6,6 @@ import json
 
 # 0. 建立 ID→名字
 FACE_DATA_DIR = os.path.join(os.path.dirname(__file__), 'Facedata')
-# 确保训练数据目录存在（若不存在则创建空目录，便于后续运行与训练）
-if not os.path.isdir(FACE_DATA_DIR):
-    os.makedirs(FACE_DATA_DIR, exist_ok=True)
-
 id2name = {}
 for fname in os.listdir(FACE_DATA_DIR):
     if not fname.lower().endswith(('.jpg', '.jpeg', '.png')):
