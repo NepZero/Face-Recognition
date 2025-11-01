@@ -373,6 +373,82 @@ face_trainer/trainer.yml
      - 返回 `{ success:true, data: { userId, savedToDataset:true, retrained:true, coldStart:false } }`
   4. 若识别失败或不匹配：返回 400 “未识别到该用户的人脸”（防止误将他人照片加入训练集）
 
+#### 5.1.1 非首次注册的识别校验机制详解
+
+**校验目的**：确保用户上传的人脸图片确实是该用户本人，防止数据污染（误将他人照片加入训练集）。
+
+**校验流程**：
+
+1. **模型识别阶段**（不是直接比对照片）：
+   ```
+   已有训练照片 → 训练模型 → trainer.yml（包含所有人脸特征）
+                                             ↓
+   新上传照片 → 通过模型识别 → 识别出用户ID
+   ```
+   - 已有照片通过 `trainner.py` 训练生成 `trainer.yml` 模型文件
+   - 模型包含所有人脸的特征数据（不是存储原图）
+   - 新上传照片通过 `rec.py` 加载模型进行识别
+   - 模型输出识别结果：`{recognized: true, userId: 6}`
+
+2. **身份匹配校验**：
+   ```javascript
+   // 后端 app.js 第 463 行
+   const isMatchUser = pyResult.recognized && 
+                       String(pyResult.userId) === String(userId);
+   ```
+   - 校验条件1：`recognized === true`（成功识别到已知人脸）
+   - 校验条件2：`识别出的 userId === 提交的 userId`（身份一致）
+
+3. **校验结果处理**：
+   - ✅ **校验通过**：保存样本并触发重训练
+   - ❌ **校验失败**：返回 400 错误，拒绝保存
+
+**校验失败的情况**：
+
+| 失败场景 | 识别结果 | 校验结果 | 原因 |
+| --- | --- | --- | --- |
+| 图片中无人脸 | `{recognized: false}` | 失败 | 图片质量问题或非人脸图片 |
+| 识别置信度过低 | `{recognized: false}` | 失败 | 图片质量差，模型无法准确识别 |
+| 识别成其他人 | `{recognized: true, userId: 7}`（提交的是 userId=6） | 失败 | 上传了他人照片，身份不匹配 |
+| 模型中没有该用户 | `{recognized: false}` | 失败 | 模型文件问题或训练不完整 |
+
+**实际校验示例**：
+
+```
+场景：用户张三（ID=6，已注册）要追加训练样本
+
+✅ 成功场景：
+1. 前端提交：userId = 6，上传张三本人照片
+2. 后端识别：调用 rec.py，通过 trainer.yml 模型识别
+   识别结果：{recognized: true, userId: 6}
+3. 后端校验：6 === 6 → 校验通过 ✅
+4. 保存样本并重训练
+
+❌ 失败场景1（上传他人照片）：
+1. 前端提交：userId = 6，但上传了李四（ID=7）的照片
+2. 后端识别：识别结果：{recognized: true, userId: 7}
+3. 后端校验：7 !== 6 → 校验失败 ❌
+4. 返回：400 "人脸注册失败：未识别到该用户的人脸"
+
+❌ 失败场景2（图片质量差）：
+1. 前端提交：userId = 6，上传模糊照片
+2. 后端识别：识别结果：{recognized: false}
+3. 后端校验：recognized === false → 校验失败 ❌
+4. 返回：400 "人脸注册失败：未识别到该用户的人脸"
+```
+
+**为什么不是直接比对照片**：
+
+- ❌ **不是**：新照片 === 已有照片（像素级比对）
+- ✅ **而是**：新照片 → 模型识别 → 比对识别出的用户ID
+- **原因**：
+  1. 效率更高：模型文件（几MB）比大量原图（可能几百MB）小
+  2. 特征匹配：模型提取的是人脸特征，而非像素级比对
+  3. 容错性强：能处理光照、角度、表情等变化
+  4. 可扩展：新增用户只需重新训练，不用遍历所有照片
+
+**总结**：非首次注册的校验是通过机器学习模型识别新上传照片中的人脸，然后比对模型识别出的用户ID与用户提交的用户ID是否一致，从而确保身份一致性并防止数据污染。
+
 ### 5.2 人脸识别与自动签到 `POST /api/face-recognition`
 
 - 入参（`multipart/form-data`）：
@@ -385,6 +461,229 @@ face_trainer/trainer.yml
   4. 如提供 `taskId`，校验任务是否属于该用户班级、状态为 active 且在时间窗内
   5. 校验通过则写入签到记录 `attendance_record`（状态 1 表示成功）
   6. 返回识别结果与签到状态
+
+#### 5.2.1 Python 识别逻辑详解（`rec.py`）
+
+**调用流程**：
+
+```
+后端 app.js（第 526 行）
+  ↓
+runPythonRecognition(图片绝对路径)
+  ↓
+子进程执行：py -3 rec.py <图片绝对路径>
+  ↓
+rec.py 处理并输出 JSON 到 stdout
+  ↓
+后端解析 stdout 中的 JSON
+  ↓
+根据识别结果进行后续业务处理
+```
+
+**详细代码逻辑**：
+
+**阶段1：初始化与 ID→名字映射建立**（`rec.py` 第 7-24 行）
+
+```python
+# 建立 ID→名字映射（从训练数据文件名提取）
+FACE_DATA_DIR = os.path.join(os.path.dirname(__file__), 'Facedata')
+id2name = {}
+for fname in os.listdir(FACE_DATA_DIR):
+    if fname.endswith(('.jpg', '.jpeg', '.png')):
+        # 从文件名 gpt.6.1.jpg 提取
+        id_part = fname.split(".")[1]      # ID = 6
+        name_part = fname.split(".")[0]    # name = "gpt"
+        id2name[int(id_part)] = name_part  # {6: "gpt"}
+```
+
+**作用**：扫描 `Facedata/` 目录，从文件名建立用户ID与名字的映射，用于返回用户名。
+
+**阶段2：图片读取**（`rec.py` 第 31-37 行）
+
+```python
+# 从命令行参数获取图片路径
+img_path = sys.argv[1] if len(sys.argv) > 1 else None
+
+if img_path:
+    img = cv2.imread(img_path)  # 读取图片
+    result = {"recognized": False, "message": "unknown"}
+    
+    if img is None:
+        # 图片读取失败，直接返回未识别
+        print(json.dumps(result, ensure_ascii=False))
+```
+
+**作用**：读取后端传入的图片文件。如果读取失败（文件不存在、格式错误等），直接返回未识别。
+
+**阶段3：模型加载**（`rec.py` 第 39-43 行）
+
+```python
+# 加载 LBPH 人脸识别模型（训练好的）
+recognizer = cv2.face.LBPHFaceRecognizer_create()
+trainer_path = os.path.join(os.path.dirname(__file__), 'face_trainer', 'trainer.yml')
+recognizer.read(trainer_path)  # 读取训练好的模型
+
+# 加载 Haar Cascade 人脸检测器（用于检测图片中的人脸位置）
+face_cascade = cv2.CascadeClassifier(os.path.join(src, 'haarcascade_frontalface_default.xml'))
+```
+
+**作用**：
+- 加载已训练的 LBPH 模型（`trainer.yml` 包含所有人脸特征数据）
+- 加载 Haar Cascade 分类器用于检测人脸位置
+
+**阶段4：人脸检测**（`rec.py` 第 45-49 行）
+
+```python
+# 转换为灰度图（人脸检测需要灰度图）
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+# 检测图片中的人脸位置
+# 参数：scaleFactor=1.2（缩放因子），minNeighbors=5（最小邻居数）
+faces = face_cascade.detectMultiScale(gray, 1.2, 5)
+
+if len(faces) == 0:
+    # 未检测到人脸，返回未识别
+    print(json.dumps(result, ensure_ascii=False))
+```
+
+**作用**：在图片中检测人脸区域。如果未检测到人脸（可能是风景照、物品照等），直接返回未识别。
+
+**阶段5：人脸识别**（`rec.py` 第 50-63 行）
+
+```python
+else:
+    # 提取第一张人脸区域（如果有多张人脸，只识别第一张）
+    x, y, w, h = faces[0]
+    face = gray[y:y+h, x:x+w]  # 裁剪出人脸区域
+    
+    # 使用 LBPH 模型进行识别
+    # idnum: 识别出的用户ID
+    # conf: 置信度（越小表示越相似，0表示完全匹配）
+    idnum, conf = recognizer.predict(face)
+    
+    # 置信度阈值判断（conf < 100 认为识别成功）
+    if conf < 100:
+        name = id2name.get(idnum, f"id_{idnum}")  # 从映射中获取名字
+        result = {
+            "recognized": True,
+            "userId": int(idnum),
+            "userName": name
+        }
+    # 如果 conf >= 100，result 保持为 {"recognized": False}
+    
+    # 输出 JSON 结果到 stdout（后端从这里读取）
+    print(json.dumps(result, ensure_ascii=False))
+```
+
+**作用**：
+- 裁剪出人脸区域（从检测到的位置提取）
+- 使用 LBPH 模型识别，得到用户ID和置信度
+- 判断识别是否成功（置信度 < 100）
+- 输出 JSON 结果到 stdout，供后端解析
+
+**阶段6：退出**（`rec.py` 第 65 行）
+
+```python
+sys.exit(0)  # 正常退出，确保只输出一次 JSON
+```
+
+**作用**：确保脚本只输出一次 JSON，后端能正确解析，不会被其他输出干扰。
+
+**完整识别流程图**：
+
+```
+后端调用：runPythonRecognition("back/public/imagefile-xxx.jpg")
+  ↓
+执行命令：py -3 rec.py back/public/imagefile-xxx.jpg
+  ↓
+rec.py 执行流程：
+  ├─ [1] 初始化：扫描 Facedata/ 目录，建立 id→name 映射
+  │     {6: "gpt", 7: "zhang", ...}
+  │
+  ├─ [2] 读取图片
+  │     img = cv2.imread("back/public/imagefile-xxx.jpg")
+  │     if img is None: return {"recognized": false}
+  │
+  ├─ [3] 加载模型
+  │     recognizer.read("face_trainer/trainer.yml")  # LBPH模型
+  │     face_cascade = Haar Cascade  # 人脸检测器
+  │
+  ├─ [4] 转换为灰度图
+  │     gray = cv2.cvtColor(img, COLOR_BGR2GRAY)
+  │
+  ├─ [5] 检测人脸位置
+  │     faces = face_cascade.detectMultiScale(gray, 1.2, 5)
+  │     if len(faces) == 0:
+  │         return {"recognized": false}
+  │
+  ├─ [6] 提取人脸区域
+  │     x, y, w, h = faces[0]  # 取第一张人脸
+  │     face = gray[y:y+h, x:x+w]  # 裁剪人脸区域
+  │
+  ├─ [7] LBPH 模型识别
+  │     idnum, conf = recognizer.predict(face)
+  │     if conf < 100:
+  │         return {"recognized": true, "userId": idnum, "userName": name}
+  │     else:
+  │         return {"recognized": false}
+  │
+  └─ [8] 输出 JSON 到 stdout 并退出
+        print(json.dumps(result))
+        sys.exit(0)
+  ↓
+后端接收 stdout，解析 JSON：
+  {"recognized": true, "userId": 6, "userName": "gpt"}
+  ↓
+后端根据识别结果处理：
+  - 如果 recognized=true：
+  │   → 查询用户信息（SELECT * FROM user WHERE id = 6）
+  │   → 验证签到任务（如果提供了taskId）
+  │   → 写入签到记录（如果任务有效）
+  │   → 返回识别成功与签到状态
+  │
+  - 如果 recognized=false：
+      → 返回未识别信息
+```
+
+**关键参数说明**：
+
+| 参数 | 代码位置 | 说明 | 默认值 | 可调范围 | 作用 |
+| --- | --- | --- | --- | --- | --- |
+| `scaleFactor` | 第 46 行 | 人脸检测缩放因子 | 1.2 | 1.1 - 1.5 | 控制检测尺度，越小检测越精确但越慢 |
+| `minNeighbors` | 第 46 行 | 最小邻居数 | 5 | 3 - 7 | 过滤误检，越大误检越少但可能漏检 |
+| `conf < 100` | 第 56 行 | 识别置信度阈值 | 100 | 60 - 150 | 判断识别是否成功，越小越严格 |
+
+**识别结果示例**：
+
+**识别成功**：
+```json
+{"recognized": true, "userId": 6, "userName": "gpt"}
+```
+
+**识别失败（未检测到人脸）**：
+```json
+{"recognized": false, "message": "unknown"}
+```
+
+**识别失败（置信度过高，识别不可靠）**：
+```json
+{"recognized": false, "message": "unknown"}
+```
+（实际上如果 `conf >= 100`，不会设置 `recognized: true`，所以返回默认的未识别结果）
+
+**与注册接口校验的区别**：
+
+- **注册接口校验**：
+  - 调用相同的 `rec.py` 识别脚本
+  - **额外步骤**：校验识别出的 `userId` 与用户提交的 `userId` 是否一致
+  - 目的：防止误将他人照片加入训练集
+
+- **识别接口**：
+  - 调用相同的 `rec.py` 识别脚本
+  - **直接使用**：识别出的 `userId` 查询用户信息
+  - 目的：识别用户身份并进行签到
+
+**总结**：Python 识别脚本的核心是通过训练好的 LBPH 模型进行人脸识别，整个流程包括：加载模型 → 检测人脸 → 提取特征 → 模型识别 → 返回结果。识别过程与注册接口的校验逻辑使用相同的模型和识别脚本，保证了识别的一致性。
 
 ## 6. 测试步骤（命令行示例）
 
