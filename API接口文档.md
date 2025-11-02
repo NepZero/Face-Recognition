@@ -4,6 +4,14 @@
 
 本系统提供完整的用户管理、角色权限、班级管理和签到功能。支持学生和老师两种角色，老师可以发布签到任务，学生通过人脸识别进行签到。
 
+**通信方式**：
+- **RESTful API**：用于数据查询、提交操作（签到提交、统计查询等）
+- **Socket.IO 实时通信**：用于任务实时推送，学生无需轮询即可收到新任务通知
+
+**推荐使用方式**：
+- 实时任务推送：使用 Socket.IO（避免频繁轮询）
+- 数据查询和提交：使用 REST API
+
 ## 系统角色
 
 - **学生 (student)**: 注册时必须选择班级，可以查看自己班级的签到任务并进行签到
@@ -560,7 +568,7 @@
 | data[].className | string | 班级名称 |
 | data[].classCode | string | 班级编码 |
 
-## 8. 老师发布签到任务接口
+## 8. 老师发布签到任务接口（含实时推送）
 
 **接口地址：** `POST /api/attendance-task`
 
@@ -598,6 +606,7 @@
 - 开始时间必须早于结束时间
 - 结束时间必须晚于当前时间
 - 目标班级必须存在且老师必须属于该班级
+- **任务发布成功后，系统会立即通过 Socket.IO 推送给对应班级的所有在线学生**
 
 **响应示例：**
 
@@ -615,6 +624,12 @@
     }
 }
 ```
+
+**Socket.IO 实时推送说明**：
+
+当任务发布成功后，系统会自动通过 Socket.IO 向目标班级的房间推送新任务。所有在该班级房间的在线学生都会收到 `new-task` 事件（事件数据结构见"11. Socket.IO 实时通信接口"）。
+
+学生前端只需监听 `new-task` 事件，即可实时收到新任务，无需轮询 API。
 
 **响应字段类型：**
 
@@ -672,7 +687,7 @@
 }
 ```
 
-## 9. 获取签到任务列表接口
+## 9. 获取签到任务列表接口（支持 Socket.IO）
 
 **接口地址：** `GET /api/attendance-tasks`
 
@@ -692,6 +707,13 @@
 **功能说明：**
 - 老师：查看自己发布的任务
 - 学生：查看自己班级的任务
+
+**Socket.IO 方式（推荐）**：
+学生也可以通过 Socket.IO 请求任务列表，发送 `get-tasks` 事件，监听 `tasks-response` 响应（详见"11. Socket.IO 实时通信接口"）。
+
+**推荐使用方式**：
+- **实时接收新任务**：使用 Socket.IO 监听 `new-task` 事件（自动推送）
+- **查询任务列表**：使用 REST API 或 Socket.IO 的 `get-tasks` 事件（按需查询）
 
 **响应示例：**
 ```json
@@ -811,3 +833,277 @@
 - teacher003 (王老师) - 密码: 123456
 - teacher004 (赵老师) - 密码: 123456
 - teacher005 (刘老师) - 密码: 123456
+
+## 11. Socket.IO 实时通信接口
+
+**连接地址：** `ws://your-server:3000` 或 `http://your-server:3000`
+
+**权限要求：** 需要登录（通过 Session Cookie 认证）
+
+### 连接说明
+
+Socket.IO 连接时会自动验证用户的 Session，只有已登录的用户才能连接。连接成功后，学生会自动加入对应班级的房间。
+
+### 连接建立流程
+
+#### 步骤1：用户登录（必须先登录）
+
+客户端必须先通过 REST API 登录，获取 Session Cookie：
+
+```javascript
+// 1. 调用登录接口
+const response = await fetch('http://localhost:3000/api/login', {
+    method: 'POST',
+    headers: {
+        'Content-Type': 'application/json'
+    },
+    credentials: 'include',  // 重要：携带 Cookie
+    body: JSON.stringify({
+        userAccount: 'student001',
+        userPassword: '123456'
+    })
+});
+
+const result = await response.json();
+// 登录成功后，浏览器会自动保存 Session Cookie
+```
+
+#### 步骤2：建立 Socket.IO 连接
+
+登录成功后，客户端建立 Socket.IO 连接：
+
+```javascript
+import io from 'socket.io-client';
+
+// 连接 Socket.IO（使用与 REST API 相同的地址）
+const socket = io('http://localhost:3000', {
+    withCredentials: true,  // 重要：自动携带 Cookie
+    transports: ['websocket', 'polling']  // 支持两种传输方式
+});
+```
+
+#### 步骤3：监听连接成功事件
+
+```javascript
+// 监听 Socket 连接成功
+socket.on('connect', () => {
+    console.log('Socket 连接已建立');
+});
+
+// 监听身份验证成功事件
+socket.on('connected', (data) => {
+    if (data.success) {
+        console.log('身份验证成功');
+        console.log('加入房间:', data.room);  // 例如：class-1
+        console.log('用户信息:', data.userInfo);
+    }
+});
+```
+
+#### 步骤4：处理连接错误
+
+```javascript
+// 监听连接错误
+socket.on('connect_error', (error) => {
+    console.error('Socket 连接失败:', error);
+    // 可能的原因：
+    // 1. 未登录（没有 Session Cookie）
+    // 2. Session 已过期
+    // 3. 服务器未启动
+});
+```
+
+### 完整连接示例代码
+
+```javascript
+// 完整的连接流程示例
+
+// 步骤1：登录获取 Session
+async function login() {
+    const response = await fetch('http://localhost:3000/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+            userAccount: 'student001',
+            userPassword: '123456'
+        })
+    });
+    
+    const result = await response.json();
+    if (result.success) {
+        console.log('登录成功');
+        return true;
+    }
+    return false;
+}
+
+// 步骤2：连接 Socket.IO
+function connectSocket() {
+    const socket = io('http://localhost:3000', {
+        withCredentials: true,
+        transports: ['websocket', 'polling']
+    });
+    
+    // 连接成功
+    socket.on('connect', () => {
+        console.log('Socket 连接成功');
+    });
+    
+    // 身份验证成功
+    socket.on('connected', (data) => {
+        if (data.success) {
+            console.log('身份验证成功');
+            console.log('房间:', data.room);
+            console.log('用户信息:', data.userInfo);
+            
+            // 可以开始监听其他事件了
+            setupEventListeners(socket);
+        }
+    });
+    
+    // 连接错误
+    socket.on('connect_error', (error) => {
+        console.error('连接失败:', error.message);
+        // 提示：可能需要重新登录
+    });
+    
+    // 断开连接
+    socket.on('disconnect', (reason) => {
+        console.log('连接断开:', reason);
+    });
+    
+    return socket;
+}
+
+// 步骤3：设置事件监听
+function setupEventListeners(socket) {
+    // 监听新任务推送
+    socket.on('new-task', (data) => {
+        if (data.success && data.task) {
+            console.log('收到新任务:', data.task);
+        }
+    });
+}
+
+// 使用示例
+async function init() {
+    // 先登录
+    const loginSuccess = await login();
+    if (loginSuccess) {
+        // 登录成功后再连接 Socket
+        const socket = connectSocket();
+    } else {
+        console.error('登录失败，无法连接 Socket');
+    }
+}
+
+init();
+```
+
+### 客户端事件
+
+#### 1. `connected` - 连接成功事件
+当 Socket 连接成功并通过身份验证后触发。
+
+**事件数据：**
+```json
+{
+    "success": true,
+    "message": "连接成功",
+    "room": "class-1",
+    "userInfo": {
+        "userId": 1,
+        "userAccount": "student001",
+        "userName": "张三",
+        "classId": 1
+    }
+}
+```
+
+#### 2. `new-task` - 新签到任务推送
+当老师发布新的签到任务时，该班级的所有在线学生都会收到此事件。
+
+**事件数据：**
+```json
+{
+    "success": true,
+    "message": "收到新的签到任务",
+    "task": {
+        "id": 1,
+        "taskName": "上午签到",
+        "classId": 1,
+        "className": "计算机科学与技术2023级1班",
+        "teacherId": 6,
+        "teacherName": "张老师",
+        "startTime": "2024-01-01 08:00:00",
+        "endTime": "2024-01-01 09:00:00",
+        "createTime": "2024-01-01 07:30:00",
+        "status": "active"
+    }
+}
+```
+
+#### 3. `tasks-response` - 任务列表响应
+响应客户端 `get-tasks` 请求。
+
+**事件数据：**
+```json
+{
+    "success": true,
+    "data": [
+        {
+            "id": 1,
+            "taskName": "上午签到",
+            "teacherId": 6,
+            "classId": 1,
+            "startTime": "2024-01-01 08:00:00",
+            "endTime": "2024-01-01 09:00:00",
+            "status": "active",
+            "className": "计算机科学与技术2023级1班",
+            "teacherName": "张老师"
+        }
+    ]
+}
+```
+
+#### 4. `pong` - 心跳响应
+响应客户端 `ping` 心跳请求。
+
+**事件数据：**
+```json
+{
+    "timestamp": 1705285800000
+}
+```
+
+### 客户端发送的事件
+
+#### 1. `get-tasks` - 请求任务列表
+学生可以通过 Socket 请求任务列表。
+
+**发送方式：** 客户端调用 `socket.emit('get-tasks')`，详见 Socket.IO 客户端文档。
+
+**响应事件：** `tasks-response`
+
+#### 2. `ping` - 心跳检测
+客户端可以定期发送心跳以保持连接。
+
+**发送方式：** 客户端调用 `socket.emit('ping')`，详见 Socket.IO 客户端文档。
+
+**响应事件：** `pong`
+
+### 注意事项
+
+1. **Session 共享**：Socket.IO 通过 Cookie 共享 Express Session，需要确保 Cookie 正确传递
+2. **跨域配置**：Socket.IO 已配置 CORS，允许跨域访问
+3. **房间管理**：学生连接后自动加入 `class-{classId}` 房间
+4. **自动重连**：Socket.IO 客户端默认支持自动重连
+5. **降级方案**：如果 Socket.IO 不可用，系统仍保留 REST API 作为备用
+
+### 与 REST API 的关系
+
+- **Socket.IO**：用于实时推送（任务通知）
+- **REST API**：用于数据查询、提交（签到提交、统计查询）
+
+两者可以并存使用，Socket.IO 负责实时通信，REST API 负责数据操作。
