@@ -15,15 +15,19 @@
  * 注意：人脸特征值由算法组保存，后端只负责传递图片
  */
 
+const fs = require('fs');
+const path = require('path');
+
+
 const express = require('express');
 // const { formidable } = require('formidable');
 const multer = require('multer');
-const path = require('path');
 const bcrypt = require('bcrypt');
 const session = require('express-session');
 const mysql = require('mysql2/promise');
 const axios = require('axios');
 const app = express();
+const { spawn } = require('child_process');
 
 // 中间件
 app.use(express.json());
@@ -59,6 +63,118 @@ const pool = mysql.createPool(dbConfig);
 
 
 const publicDir = path.join(__dirname, './public');
+const faceDataDir = path.join(__dirname, '..', 'opencv', 'face_get', 'Facedata');
+// 运行 Python 脚本以生成/更新算法 mock 数据
+async function runPythonMockGenerator() {
+    return new Promise((resolve, reject) => {
+        const scriptPath = path.join(__dirname, '..', 'opencv', 'face_get', 'rec.py');
+        const py = spawn('python', [scriptPath], {
+            cwd: path.join(__dirname, '..')
+        });
+
+        let stderr = '';
+        py.stderr.on('data', (d) => { stderr += d.toString(); });
+        py.on('close', (code) => {
+            if (code !== 0) {
+                return reject(new Error(stderr || `Python exited with code ${code}`));
+            }
+            resolve();
+        });
+    });
+}
+
+// 运行 Python 实时识别并从 stdout 解析 JSON（带详细日志与多解释器兼容）
+async function runPythonRecognition(imagePath) {
+    // 支持通过环境变量覆盖 Python 解释器（如 C:\\Python39\\python.exe 或 py）
+    const envPython = process.env.PYTHON_EXE && process.env.PYTHON_EXE.trim();
+    const interpreters = [
+        envPython ? { exe: envPython, args: [] } : null,
+        { exe: 'py', args: ['-3'] },
+        { exe: 'python', args: [] },
+        { exe: 'python3', args: [] }
+    ].filter(Boolean);
+    const scriptPath = path.join(__dirname, '..', 'opencv', 'face_get', 'rec.py');
+    const cwd = path.join(__dirname, '..');
+
+    const trySpawn = (opt) => new Promise((resolve, reject) => {
+        const exe = opt.exe;
+        const baseArgs = Array.isArray(opt.args) ? opt.args : [];
+        const args = [...baseArgs, scriptPath, imagePath];
+        const py = spawn(exe, args, { cwd });
+        let stdout = '';
+        let stderr = '';
+        py.stdout.on('data', (d) => { const s = d.toString(); stdout += s; });
+        py.stderr.on('data', (d) => { const s = d.toString(); stderr += s; });
+        py.on('error', (e) => reject(new Error(`spawn ${exe} failed: ${e.message}`)));
+        py.on('close', (code) => {
+            console.log(`[Python exe]: ${exe} ${args.join(' ')}`);
+            console.log('[Python stdout]:', stdout);
+            if (stderr) console.error('[Python stderr]:', stderr);
+            if (code !== 0) {
+                return reject(new Error(stderr || `Python exited with code ${code} (exe=${exe})`));
+            }
+            try {
+                const parsed = JSON.parse(stdout.trim());
+                resolve(parsed);
+            } catch (e) {
+                reject(new Error(`Failed to parse Python stdout as JSON: ${stdout}\n${e.message}`));
+            }
+        });
+    });
+
+    let lastErr = null;
+    for (const opt of interpreters) {
+        try {
+            return await trySpawn(opt);
+        } catch (e) {
+            lastErr = e;
+        }
+    }
+    throw lastErr || new Error('No Python interpreter found');
+}
+
+// 运行 Python 训练脚本，生成/更新 trainer.yml（可选触发）
+async function runPythonTraining() {
+    const envPython = process.env.PYTHON_EXE && process.env.PYTHON_EXE.trim();
+    const interpreters = [
+        envPython ? { exe: envPython, args: [] } : null,
+        { exe: 'py', args: ['-3'] },
+        { exe: 'python', args: [] },
+        { exe: 'python3', args: [] }
+    ].filter(Boolean);
+    const scriptPath = path.join(__dirname, '..', 'opencv', 'face_get', 'trainner.py');
+    const cwd = path.join(__dirname, '..');
+
+    const trySpawn = (opt) => new Promise((resolve, reject) => {
+        const exe = opt.exe;
+        const baseArgs = Array.isArray(opt.args) ? opt.args : [];
+        const args = [...baseArgs, scriptPath];
+        const py = spawn(exe, args, { cwd });
+        let stderr = '';
+        py.stderr.on('data', (d) => { stderr += d.toString(); });
+        py.on('close', (code) => {
+            console.log(`[Python train exe]: ${exe} ${args.join(' ')}`);
+            if (stderr) console.error('[Python train stderr]:', stderr);
+            if (code !== 0) {
+                return reject(new Error(stderr || `Python training exited with code ${code} (exe=${exe})`));
+            }
+            resolve();
+        });
+        py.on('error', (e) => reject(new Error(`spawn ${exe} failed: ${e.message}`)));
+    });
+
+    let lastErr = null;
+    for (const opt of interpreters) {
+        try {
+            await trySpawn(opt);
+            return;
+        } catch (e) {
+            lastErr = e;
+        }
+    }
+    throw lastErr || new Error('No Python interpreter found for training');
+}
+
 console.log(publicDir);
 // 配置 multer
 const storage = multer.diskStorage({
@@ -302,47 +418,85 @@ app.post('/api/face-register', upload.single('imagefile'), async (req, res) => {
             });
         }
 
-        // TODO: 调用算法组接口进行人脸特征提取和保存
-        // 算法组负责保存人脸特征值，后端只传递图片
+        // 判断是否冷启动：faceRegistered = 0 时跳过识别校验，直接入库并重训
+        const connection = await pool.getConnection();
         try {
-            // TODO: 替换为真实的算法组接口地址
-            const algorithmResponse = await axios.post('http://algorithm-service/api/face-register', {
-                imagePath: req.file.path,
-                userId: userId
-            });
-
-            if (algorithmResponse.data.success) {
-                // 更新用户的人脸注册状态
-                const connection = await pool.getConnection();
-                try {
-                    await connection.execute(
-                        'UPDATE user SET faceRegistered = 1 WHERE id = ?',
-                        [userId]
-                    );
-
-                    res.json({
-                        success: true,
-                        message: '人脸注册成功',
-                        data: {
-                            userId: userId
-                        }
-                    });
-                } finally {
-                    connection.release();
-                }
-            } else {
-                res.status(400).json({
-                    success: false,
-                    message: algorithmResponse.data.message || '人脸注册失败'
-                });
+            const [userRows] = await connection.execute(
+                'SELECT id, userAccount, userName, faceRegistered FROM user WHERE id = ? ',
+                [userId]
+            );
+            if (userRows.length === 0) {
+                return res.status(404).json({ success: false, message: '用户不存在' });
             }
 
-        } catch (algorithmError) {
-            console.error('算法组接口调用失败:', algorithmError);
-            res.status(500).json({
-                success: false,
-                message: '人脸注册失败，请重试'
-            });
+            const user = userRows[0];
+            const absImagePath = path.join(publicDir, req.file.filename);
+            const baseName = (user.userAccount || user.userName || `user_${userId}`)
+                .toString()
+                .replace(/[^a-zA-Z0-9_\-\u4e00-\u9fa5]/g, '_');
+
+            // 冷启动：首次注册不做识别匹配，直接入库并重训
+            if (!user.faceRegistered) {
+                try {
+                    const ext = path.extname(req.file.originalname || '').toLowerCase() || '.jpg';
+                    const index = Date.now();
+                    const targetName = `${baseName}.${userId}.${index}${ext}`;
+                    const targetPath = path.join(faceDataDir, targetName);
+                    fs.mkdirSync(faceDataDir, { recursive: true });
+                    fs.copyFileSync(absImagePath, targetPath);
+                    await connection.execute('UPDATE user SET faceRegistered = 1 WHERE id = ?', [userId]);
+                    await runPythonTraining();
+                    return res.json({
+                        success: true,
+                        message: '人脸注册成功（首次注册）',
+                        data: { userId, savedToDataset: true, retrained: true, coldStart: true }
+                    });
+                } catch (e) {
+                    console.error('首次注册入库/训练失败:', e);
+                    return res.status(500).json({ success: false, message: '人脸注册失败，请重试' });
+                }
+            }
+
+            // 非首次：执行识别校验 → 保存样本 → 重训
+            try {
+                const pyResult = await runPythonRecognition(absImagePath);
+                const isMatchUser = pyResult && pyResult.recognized && String(pyResult.userId) === String(userId);
+                if (!isMatchUser) {
+                    return res.status(400).json({ success: false, message: '人脸注册失败：未识别到该用户的人脸' });
+                }
+
+                // 保存样本到训练集
+                try {
+                    const ext = path.extname(req.file.originalname || '').toLowerCase() || '.jpg';
+                    const index = Date.now();
+                    const targetName = `${baseName}.${userId}.${index}${ext}`;
+                    const targetPath = path.join(faceDataDir, targetName);
+                    fs.mkdirSync(faceDataDir, { recursive: true });
+                    fs.copyFileSync(absImagePath, targetPath);
+                } catch (copyErr) {
+                    console.error('复制样本到训练集失败:', copyErr);
+                }
+
+                // 重训
+                try {
+                    await runPythonTraining();
+                } catch (trainErr) {
+                    console.error('训练失败:', trainErr);
+                }
+
+                // 确保状态为已注册
+                await connection.execute('UPDATE user SET faceRegistered = 1 WHERE id = ?', [userId]);
+                return res.json({
+                    success: true,
+                    message: '人脸注册成功',
+                    data: { userId, savedToDataset: true, retrained: true, coldStart: false }
+                });
+            } catch (algorithmError) {
+                console.error('算法组接口调用失败:', algorithmError);
+                return res.status(500).json({ success: false, message: '人脸注册失败，请重试' });
+            }
+        } finally {
+            connection.release();
         }
 
     } catch (error) {
@@ -366,16 +520,12 @@ app.post('/api/face-recognition', upload.single('imagefile'), async (req, res) =
             });
         }
 
-        // TODO: 调用算法组接口进行人脸识别
-        try {
-            // TODO: 替换为真实的算法组接口地址
-            const algorithmResponse = await axios.post('http://algorithm-service/api/face-recognition', {
-                imagePath: req.file.path
-            });
+		// 实时调用 Python 识别当前上传图片
+		try {
+			const absImagePath = path.join(publicDir, req.file.filename);
+			const recognitionResult = await runPythonRecognition(absImagePath);
 
-            const recognitionResult = algorithmResponse.data;
-
-            if (recognitionResult.recognized) {
+            if (recognitionResult && recognitionResult.recognized) {
                 // 查找用户信息
                 const connection = await pool.getConnection();
                 try {
@@ -452,7 +602,8 @@ app.post('/api/face-recognition', upload.single('imagefile'), async (req, res) =
             console.error('算法组接口调用失败:', algorithmError);
             res.status(500).json({
                 success: false,
-                message: '人脸识别失败'
+                message: '人脸识别失败',
+                error: String(algorithmError && algorithmError.message || algorithmError)
             });
         }
 

@@ -1,0 +1,41 @@
+{
+    "allowAll": false,
+    "users": [
+        {
+            "userId": 4,
+            "message": "人脸注册成功"
+        },
+        {
+            "userId": 6,
+            "message": "人脸注册成功"
+        },
+        {
+            "userId": 5,
+            "message": "人脸注册成功"
+        },
+        {
+            "userId": 1,
+            "message": "人脸注册成功"
+        },
+        {
+            "userId": 2,
+            "message": "人脸注册成功"
+        },
+        {
+            "userId": 7,
+            "message": "人脸注册成功"
+        },
+        {
+            "userId": 3,
+            "message": "人脸注册成功"
+        },
+        {
+            "userId": 8,
+            "message": "人脸注册成功"
+        }
+    ],
+    "default": {
+        "success": false,
+        "message": "未检测到人脸或图片质量过低"
+    }
+}
