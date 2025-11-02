@@ -2,7 +2,7 @@
 	<view class="layout" @touchmove.stop.prevent="() => {}" :style="'height:'+screenHeight+'px!important'">
 		<view class="avater"></view>
 		<view class="name">{{userInfo['name']}}</view>
-		<view class="ip">192.10.11.2</view>
+		<view class="ip">{{userInfo['class']}}</view>
 		<view class="sections">
 			<view class="login section" @click="login_click">
 				<uni-icons type="right" size="25"></uni-icons>
@@ -98,7 +98,8 @@
 						'name':res.data['name'],
 						'id':res.data['id'],
 						'classid':res.data['classid'],
-						'face':res.data['face']
+						'face':res.data['face'],
+						'class':res.data['class']
 					}
 				}
 			});
@@ -132,7 +133,7 @@
 			success: function (res) {
 				const path=res.tempFilePaths[0];
 				uni.uploadFile({
-							url: 'http://'+ip.value+'/api/face-recognition', //仅为示例，非真实的接口地址
+							url: 'http://'+ip.value+'/api/face-recognition',
 							filePath: path,
 							name: 'imagefile',
 							formData: {
@@ -151,7 +152,6 @@
 								});
 							},
 							complete:()=>{
-								console.log('buzhidao');
 							}
 				});
 			}

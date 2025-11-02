@@ -59,33 +59,8 @@
 		url: '../login/login'
 		});
 	}
-	function register_match()
+	function register_match() //账号标准化检验
 	{
-		if(!account_value.value)
-		{
-			uni.showToast({
-			    title: '账号不能为空',
-			    icon: 'error'
-			});
-			return true;
-		}
-		else if(!password_value.value || !password_again_value.value)
-		{
-			uni.showToast({
-			    title: '密码不能为空',
-			    icon: 'error'
-			});
-			return true;
-		}
-		else if(!username_value.value)
-		{
-			uni.showToast({
-			    title: '用户名不能为空',
-			    icon: 'error'
-			});
-			return true;
-		}
-		
 		if(password_again_value.value!=password_value.value)
 		{
 			uni.showToast({
@@ -96,11 +71,14 @@
 		}
 	}
 	
-	function register_click()
+	function register_click() //注册按钮
 	{
-		if(register_match())
+		if(password_again_value.value && password_value.value)
 		{
-			return;
+			if(register_match())
+			{
+				return;
+			}
 		}
 		uni.showLoading({
 			title:'正在注册',
@@ -109,6 +87,7 @@
 		uni.request({
 		    url: register_url.value, 
 		    method: 'POST',
+			timeout:5000,
 			data:{"userAccount":account_value.value,"userPassword":password_value.value,"userName":username_value.value,"classId":index.value+1},
 		    success: (res) => {
 				if(res.data.success)
@@ -123,18 +102,20 @@
 				}
 				else
 				{
-					console.log(res)
-					uni.showToast({
-					    title: '注册失败',
-					    icon: 'error'
+					uni.showModal({
+						title: '注册失败',
+						content: res.data.message,
+						showCancel:false
 					});
 				}
 		    },
 		    fail: (err) => {
-				uni.showToast({
-				    title: '注册失败',
-				    icon: 'error'
+				uni.showModal({
+					title: '注册失败',
+					content: res.data.message,
+					showCancel:false
 				});
+
 		    },
 			complete:()=>{
 				uni.hideLoading();

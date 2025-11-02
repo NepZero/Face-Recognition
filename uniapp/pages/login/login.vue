@@ -65,6 +65,7 @@
 		uni.request({
 		    url: login_url.value, // 
 		    method: 'POST',
+			timeout:5000,
 			data:{"userAccount":account_value.value,"userPassword":password_value.value},
 		    success: (res) => {
 				res=res.data;
@@ -72,7 +73,7 @@
 				{
 					uni.setStorage({
 						key: 'userInfo',
-						data: {'name':res.data.userName,'id':res.data.userId,'account':res.data.userAccount,'face':res.data.faceRegistered,'classid':res.data.classId,'userRole':res.data.userRole},
+						data: {'name':res.data.userName,'id':res.data.userId,'account':res.data.userAccount,'face':res.data.faceRegistered,'classid':res.data.classId,'userRole':res.data.userRole,'class':'无'},
 						success: function () {
 							console.log('setStorage success');
 						}

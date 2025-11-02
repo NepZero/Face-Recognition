@@ -66,11 +66,12 @@
 		});
 	}
 	
-	function testConnection() {
+	function testConnection() {		//网络测试
 		connection_flag.value=true;
 	    uni.request({
 	        url: url.value, // 替换为你的电脑IP
 	        method: 'POST',
+			timeout:5000,
 	        success: (res) => {
 	            console.log('连接测试成功:', res.data);
 	            uni.showToast({
