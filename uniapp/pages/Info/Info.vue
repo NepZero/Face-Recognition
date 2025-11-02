@@ -124,7 +124,7 @@
 		userInfo_update(0);
 	}
 	
-	function faceClick()
+	function faceClick()	//人脸注册上传
 	{
 		uni.chooseImage({
 			count: 1, //默认9
@@ -140,15 +140,30 @@
 								'userId':userInfo.id
 							},
 							success: (res) => {
-								uni.showToast({
-								    title: '上传成功',
-								    icon: 'success'
-								});
+								if(res.statusCode==200)
+								{
+									uni.showToast({
+									    title: '注册人脸成功',
+									    icon: 'success'
+									});
+								}
+								else
+								{
+									res.data=JSON.parse(res.data)
+									uni.showModal({
+										title: '注册人脸失败',
+										content: res.data['message'],
+										showCancel:false
+									});
+								}
+								
 							},
 							fail:(res)=>{
-								uni.showToast({
-								    title: '上传失败',
-								    icon: 'fail'
+								res.data=JSON.parse(res.data)
+								uni.showModal({
+									title: '注册人脸失败',
+									content: res.data['message'],
+									showCancel:false
 								});
 							},
 							complete:()=>{
