@@ -283,9 +283,9 @@ app.post('/api/register', async (req, res) => {
             const saltRounds = 10;
             const hashedPassword = await bcrypt.hash(userPassword, saltRounds);
 
-            // 验证班级是否存在
+            // 验证班级是否存在并获取班级名称
             const [classRows] = await connection.execute(
-                'SELECT id FROM class WHERE id = ?',
+                'SELECT id, className FROM class WHERE id = ?',
                 [classId]
             );
             if (classRows.length === 0) {
@@ -294,6 +294,8 @@ app.post('/api/register', async (req, res) => {
                     message: '选择的班级不存在'
                 });
             }
+
+            const classInfo = classRows[0];
 
             // 插入新用户（固定为学生角色）
             const [result] = await connection.execute(
@@ -309,7 +311,8 @@ app.post('/api/register', async (req, res) => {
                     userAccount: userAccount,
                     userName: userName,
                     userRole: 'student',
-                    classId: classId
+                    classId: classId,
+                    className: classInfo.className
                 }
             });
 
@@ -341,9 +344,12 @@ app.post('/api/login', async (req, res) => {
         const connection = await pool.getConnection();
 
         try {
-            // 查找用户
+            // 查找用户并关联班级信息获取班级名称
             const [rows] = await connection.execute(
-                'SELECT * FROM user WHERE userAccount = ? ',
+                `SELECT u.*, c.className 
+                 FROM user u 
+                 LEFT JOIN class c ON u.classId = c.id 
+                 WHERE u.userAccount = ?`,
                 [userAccount]
             );
 
@@ -371,6 +377,7 @@ app.post('/api/login', async (req, res) => {
             req.session.userName = user.userName;
             req.session.userRole = user.userRole;
             req.session.classId = user.classId;
+            req.session.className = user.className || null;
             req.session.faceRegistered = user.faceRegistered;
 
             res.json({
@@ -382,6 +389,7 @@ app.post('/api/login', async (req, res) => {
                     userName: user.userName,
                     userRole: user.userRole,
                     classId: user.classId,
+                    className: user.className || null,
                     faceRegistered: user.faceRegistered
                 }
             });
@@ -957,6 +965,7 @@ app.get('/api/user-info', (req, res) => {
             userName: req.session.userName,
             userRole: req.session.userRole,
             classId: req.session.classId,
+            className: req.session.className || null,
             faceRegistered: req.session.faceRegistered
         }
     });

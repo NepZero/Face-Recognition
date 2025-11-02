@@ -61,7 +61,8 @@
         "userAccount": "student001",
         "userName": "张三",
         "userRole": "student",
-        "classId": 1
+        "classId": 1,
+        "className": "计算机科学与技术2023级1班"
     }
 }
 ```
@@ -77,6 +78,7 @@
 | data.userName | string | 姓名 |
 | data.userRole | string | 角色：student |
 | data.classId | number | 班级 ID |
+| data.className | string | 班级名称 |
 
 校验失败示例：
 ```json
@@ -125,6 +127,7 @@
         "userName": "张三",
         "userRole": "student",
         "classId": 1,
+        "className": "计算机科学与技术2023级1班",
         "faceRegistered": 0
     }
 }
@@ -141,6 +144,7 @@
 | data.userName | string | 姓名 |
 | data.userRole | string | 角色：student/teacher |
 | data.classId | number | 班级 ID |
+| data.className | string/null | 班级名称，老师可能为null |
 | data.faceRegistered | number | 是否注册人脸：0/1 |
 
 老师登录成功：
@@ -154,6 +158,7 @@
         "userName": "张老师",
         "userRole": "teacher",
         "classId": 1,
+        "className": "计算机科学与技术2023级1班",
         "faceRegistered": 0
     }
 }
@@ -205,6 +210,7 @@
         "userName": "张三",
         "userRole": "student",
         "classId": 1,
+        "className": "计算机科学与技术2023级1班",
         "faceRegistered": 1
     }
 }
@@ -221,6 +227,7 @@
 | data.userName | string | 姓名 |
 | data.userRole | string | 角色 |
 | data.classId | number | 班级 ID |
+| data.className | string/null | 班级名称，可能为null |
 | data.faceRegistered | number | 是否注册人脸：0/1 |
 
 未登录：
