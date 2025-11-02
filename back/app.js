@@ -8,6 +8,10 @@
  * 4. POST /api/face-recognition - 人脸识别（调用算法组接口）
  * 5. POST /api/attendance - 签到记录
  * 
+ * Socket.IO 实时通信：
+ * - 学生接收签到任务推送
+ * - 实时签到状态更新
+ * 
  * 数据库表：
  * - user: 用户信息表
  * - attendance_record: 签到记录表
@@ -17,31 +21,35 @@
 
 const fs = require('fs');
 const path = require('path');
-
+const http = require('http');
 
 const express = require('express');
 // const { formidable } = require('formidable');
 const multer = require('multer');
 const bcrypt = require('bcrypt');
 const session = require('express-session');
+const cookieParser = require('cookie-parser');
 const mysql = require('mysql2/promise');
 const axios = require('axios');
+const { Server } = require('socket.io');
 const app = express();
 const { spawn } = require('child_process');
 
 // 中间件
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
 // Session配置
-app.use(session({
+const sessionMiddleware = session({
     secret: 'my-course-project-secret-key-12345',
     resave: false,
     saveUninitialized: false,
     cookie: {
         maxAge: 24 * 60 * 60 * 1000 // 24小时
     }
-}));
+});
+app.use(sessionMiddleware);
 
 // MySQL数据库配置
 // 请根据实际环境修改以下配置
@@ -731,11 +739,47 @@ app.post('/api/attendance-task', requireLogin, async (req, res) => {
                 [taskName, teacherId, classId, startTime, endTime]
             );
 
+            const taskId = result.insertId;
+
+            // 获取班级名称和老师信息用于推送
+            const [taskInfoRows] = await connection.execute(
+                `SELECT at.*, c.className, u.userName as teacherName
+                 FROM attendance_task at
+                 LEFT JOIN class c ON at.classId = c.id
+                 LEFT JOIN user u ON at.teacherId = u.id
+                 WHERE at.id = ?`,
+                [taskId]
+            );
+
+            const taskInfo = taskInfoRows[0];
+
+            // 通过 Socket.IO 实时推送给对应班级的所有学生
+            if (global.io) {
+                const roomName = `class-${classId}`;
+                global.io.to(roomName).emit('new-task', {
+                    success: true,
+                    message: '收到新的签到任务',
+                    task: {
+                        id: taskId,
+                        taskName: taskName,
+                        classId: classId,
+                        className: taskInfo.className,
+                        teacherId: teacherId,
+                        teacherName: taskInfo.teacherName,
+                        startTime: startTime,
+                        endTime: endTime,
+                        createTime: taskInfo.createTime,
+                        status: 'active'
+                    }
+                });
+                console.log(`[Socket.IO] 签到任务已推送给房间: ${roomName}, 任务ID: ${taskId}`);
+            }
+
             res.json({
                 success: true,
                 message: '签到任务发布成功',
                 data: {
-                    taskId: result.insertId,
+                    taskId: taskId,
                     taskName: taskName,
                     classId: classId,
                     startTime: startTime,
@@ -1015,6 +1059,185 @@ app.post('/send', upload.single('imagefile'), (req, res) => {
     }
 })
 
-app.listen(3000, () => {
-    console.log('服务器已经执行');
+// ==================== Socket.IO 配置 ====================
+// 创建 HTTP 服务器
+const httpServer = http.createServer(app);
+
+// 创建 Socket.IO 服务器
+const io = new Server(httpServer, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"],
+        credentials: true
+    },
+    transports: ['websocket', 'polling']
+});
+
+// Socket.IO 中间件：身份验证（共享 Express Session）
+// 将 Express session 中间件转换为 Socket.IO 中间件
+io.use((socket, next) => {
+    const req = socket.request;
+    
+    // 调试信息：打印请求头
+    console.log('[Socket.IO Auth] 握手请求头:', {
+        cookie: req.headers.cookie ? req.headers.cookie.substring(0, 80) + '...' : '无',
+        'user-agent': req.headers['user-agent'],
+        'all-headers': Object.keys(req.headers)
+    });
+    
+    // 手动解析 Cookie（确保 cookie-parser 已处理，如果没有则手动解析）
+    if (!req.headers.cookie) {
+        console.error('[Socket.IO Auth] 错误: 请求头中未找到 cookie');
+        return next(new Error('未找到 session cookie'));
+    }
+    
+    // 确保 cookie-parser 已处理 Cookie（如果没有，手动调用）
+    if (typeof req.cookies === 'undefined') {
+        // 如果没有 cookie-parser 处理过，手动解析 Cookie
+        const cookies = {};
+        req.headers.cookie.split(';').forEach(cookie => {
+            const parts = cookie.trim().split('=');
+            if (parts.length === 2) {
+                cookies[parts[0]] = decodeURIComponent(parts[1]);
+            }
+        });
+        req.cookies = cookies;
+    }
+    
+    // 创建一个 response 对象
+    const res = {
+        end: () => {},
+        writeHead: () => {},
+        cookie: () => {},
+        setHeader: () => {}
+    };
+    
+    // 使用 session 中间件解析 session
+    sessionMiddleware(req, res, () => {
+        if (req.session && req.session.userId) {
+            // 将用户信息附加到 socket
+            socket.userId = req.session.userId;
+            socket.userAccount = req.session.userAccount;
+            socket.userName = req.session.userName;
+            socket.userRole = req.session.userRole;
+            socket.classId = req.session.classId;
+            socket.className = req.session.className;
+            socket.request = req; // 保存 request 对象
+            
+            console.log('[Socket.IO Auth] 身份验证成功:', {
+                userId: socket.userId,
+                userAccount: socket.userAccount,
+                userRole: socket.userRole
+            });
+            
+            next();
+        } else {
+            console.error('[Socket.IO Auth] 错误: Session 无效或未登录', {
+                hasSession: !!req.session,
+                sessionKeys: req.session ? Object.keys(req.session) : [],
+                cookies: req.cookies,
+                cookieHeader: req.headers.cookie
+            });
+            next(new Error('未登录或 session 无效'));
+        }
+    });
+});
+
+// 用于存储 Socket.IO 的全局变量，供其他模块使用
+global.io = io;
+
+// Socket.IO 连接处理
+io.on('connection', (socket) => {
+    console.log(`[Socket.IO] 用户连接: ${socket.userAccount} (ID: ${socket.userId}, 角色: ${socket.userRole})`);
+
+    // 学生加入班级房间
+    if (socket.userRole === 'student' && socket.classId) {
+        const roomName = `class-${socket.classId}`;
+        socket.join(roomName);
+        console.log(`[Socket.IO] 学生 ${socket.userAccount} 加入房间: ${roomName}`);
+        
+        // 通知客户端连接成功
+        socket.emit('connected', {
+            success: true,
+            message: '连接成功',
+            room: roomName,
+            userInfo: {
+                userId: socket.userId,
+                userAccount: socket.userAccount,
+                userName: socket.userName,
+                classId: socket.classId
+            }
+        });
+    } else if (socket.userRole === 'teacher') {
+        // 老师连接
+        console.log(`[Socket.IO] 老师 ${socket.userAccount} 已连接`);
+        socket.emit('connected', {
+            success: true,
+            message: '连接成功',
+            userInfo: {
+                userId: socket.userId,
+                userAccount: socket.userAccount,
+                userName: socket.userName,
+                role: 'teacher'
+            }
+        });
+    }
+
+    // 处理断开连接
+    socket.on('disconnect', () => {
+        console.log(`[Socket.IO] 用户断开连接: ${socket.userAccount}`);
+    });
+
+    // 处理心跳
+    socket.on('ping', () => {
+        socket.emit('pong', { timestamp: Date.now() });
+    });
+
+    // 学生请求签到任务列表（通过 Socket）
+    socket.on('get-tasks', async () => {
+        if (socket.userRole !== 'student' || !socket.classId) {
+            socket.emit('tasks-response', {
+                success: false,
+                message: '权限不足'
+            });
+            return;
+        }
+
+        try {
+            const connection = await pool.getConnection();
+            try {
+                const [rows] = await connection.execute(
+                    `SELECT at.*, c.className, u.userName as teacherName
+                     FROM attendance_task at
+                     LEFT JOIN class c ON at.classId = c.id
+                     LEFT JOIN user u ON at.teacherId = u.id
+                     WHERE at.classId = ?
+                     ORDER BY at.createTime DESC`,
+                    [socket.classId]
+                );
+
+                socket.emit('tasks-response', {
+                    success: true,
+                    data: rows
+                });
+            } finally {
+                connection.release();
+            }
+        } catch (error) {
+            console.error('获取签到任务列表错误:', error);
+            socket.emit('tasks-response', {
+                success: false,
+                message: '获取任务列表失败'
+            });
+        }
+    });
+});
+
+// ==================== 修改签到任务发布接口，添加 Socket 推送 ====================
+
+// 启动服务器
+const PORT = 3000;
+httpServer.listen(PORT, () => {
+    console.log(`服务器已启动，HTTP 端口: ${PORT}`);
+    console.log(`Socket.IO 已启用，WebSocket 端口: ${PORT}`);
 })
