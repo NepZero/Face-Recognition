@@ -73,7 +73,7 @@
 				{
 					uni.setStorage({
 						key: 'userInfo',
-						data: {'name':res.data.userName,'id':res.data.userId,'account':res.data.userAccount,'face':res.data.faceRegistered,'classid':res.data.classId,'userRole':res.data.userRole,'class':'无'},
+						data: {'name':res.data.userName,'id':res.data.userId,'account':res.data.userAccount,'face':res.data.faceRegistered,'classid':res.data.classId,'userRole':res.data.userRole,'class':res.data.className},
 						success: function () {
 							console.log('setStorage success');
 						}
