@@ -1,6 +1,6 @@
 <template>
 	<view class="layout" @touchmove.stop.prevent="() => {}" :style="'height:'+screenHeight+'px!important'">
-		<button class='loadbutton' size="default" @click="uploadimg">点击拍照</button>
+		<button class='loadbutton' size="default" @click="uploadimg">拍照签到</button>
 		<button size="default" @click="testConnection" :loading=connection_flag>网络测试</button>
 		<button size="default" @click="ipconfig">网络配置</button>
 		<button size="default" @click="checkClick" v-if="!studentFlag">发布签到</button>
@@ -28,8 +28,20 @@
 		get_ip();
 	})
 	
-	function uploadimg()
+	function uploadimg() //拍照签到event
 	{
+		uni.getStorage({
+			key: 'upload_ip',
+			success: function (res) {
+				if(!res.data)
+				{
+					return;
+				}
+			},
+			fail:function (res){
+				return;
+			}
+		});
 		uni.chooseImage({
 			count: 1, //默认9
 			sizeType: ['original', 'compressed'], //可以指定是原图还是压缩图，默认二者都有

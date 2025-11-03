@@ -133,11 +133,11 @@
 			success: function (res) {
 				const path=res.tempFilePaths[0];
 				uni.uploadFile({
-							url: 'http://'+ip.value+'/api/face-recognition',
+							url: 'http://'+ip.value+'/api/face-register',
 							filePath: path,
 							name: 'imagefile',
 							formData: {
-								'userId':userInfo.id
+								'userId':userInfo.value.id
 							},
 							success: (res) => {
 								if(res.statusCode==200)
