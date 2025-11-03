@@ -404,23 +404,35 @@
 
 **请求方式：** `multipart/form-data`
 
-**权限要求：** 无需登录（但建议在生产环境添加认证）
+**权限要求：** **需要登录**（通过 Session Cookie 验证）
+
+**安全机制：**
+- **学生用户**：只能识别本人的人脸，上传他人照片会被拒绝（403错误）
+- **老师用户**：可以识别任何人的脸（用于管理、测试等场景）
+- 用户身份通过 Session 自动识别，前端**无需传 userId**
 
 **行为摘要：**
 - 接收上传的人脸图片
+- 验证用户登录状态（Session）
 - 调用 Python 识别脚本 `rec.py` 进行人脸识别
+- 验证识别结果是否符合安全规则（学生只能识别自己）
 - 识别成功后查询用户信息
 - 若提供 `taskId` 且任务有效，自动写入签到记录
 - 返回识别结果与签到状态
 
 **功能说明：**
 - 上传人脸图片进行识别
+- 自动进行身份验证（学生只能识别本人）
 - 识别成功后自动记录签到（如果提供了有效的 `taskId`）
 - 返回用户信息和签到状态
 
 **请求参数：**
 - `imagefile`: 待识别的人脸图片文件（必需）
 - `taskId`: 签到任务ID（可选）
+
+**注意：**
+- 前端**不需要传 userId**，后端从 Session 中自动获取当前登录用户信息
+- 请求会自动携带登录时设置的 Session Cookie
 
 **字段类型：**
 
@@ -471,6 +483,27 @@
 }
 ```
 
+安全验证失败（学生上传他人照片）：
+```json
+{
+    "success": false,
+    "message": "安全验证失败：只能识别本人的人脸",
+    "data": {
+        "recognized": true,
+        "recognizedUserId": 6,
+        "currentUserId": 1
+    }
+}
+```
+
+未登录：
+```json
+{
+    "success": false,
+    "message": "请先登录"
+}
+```
+
 **响应字段类型（识别失败）：** 同上，但 `data.recognized=false`，无用户信息，`attendanceRecorded=false`。
 
 **状态码说明：**
@@ -479,7 +512,9 @@
 | --- | --- | --- |
 | 200 | 识别成功或失败（正常响应） | `{ "success": true, "message": "人脸识别成功，已自动签到", "data": {...} }` |
 | 200 | 未识别到已知人脸（正常响应） | `{ "success": true, "message": "未识别到已知人脸", "data": { "recognized": false } }` |
+| 401 | 未登录 | `{ "success": false, "message": "请先登录" }` |
 | 400 | 参数错误 | `{ "success": false, "message": "未收到图片文件" }` |
+| 403 | 安全验证失败 | `{ "success": false, "message": "安全验证失败：只能识别本人的人脸" }` |
 | 500 | 服务器错误 | `{ "success": false, "message": "用户信息查询失败" }` |
 | 500 | 算法调用失败 | `{ "success": false, "message": "人脸识别失败", "error": "..." }` |
 
@@ -487,48 +522,92 @@
 
 | 错误信息 | HTTP 状态码 | 可能原因 | 解决方案 |
 | --- | --- | --- | --- |
+| `请先登录` | 401 | 未登录或 Session 过期 | 先调用登录接口 `/api/login`，获取 Session Cookie |
 | `未收到图片文件` | 400 | `imagefile` 字段缺失或为空 | 检查前端上传代码，确保字段名为 `imagefile` |
+| `安全验证失败：只能识别本人的人脸` | 403 | 学生用户上传了他人的照片 | 确保上传的是本人照片，或使用老师账号进行识别 |
 | `用户信息查询失败` | 500 | 算法识别出的 `userId` 在数据库不存在 | 1. 检查训练集文件名的 `id` 是否与数据库对齐<br>2. 确认数据库中是否存在该用户<br>3. 重新训练模型 |
 | `人脸识别失败` | 500 | Python 脚本调用失败或解析错误 | 查看后端日志的 `[Python stderr]`，检查 Python 环境和依赖 |
 
 **业务逻辑：**
 
-1. **接收与保存**：
+1. **身份验证**：
+   - 检查 Session 中是否存在 `userId`（通过 `requireLogin` 中间件）
+   - 若未登录，返回 401 "请先登录"
+   - 从 Session 获取当前用户信息：`userId` 和 `userRole`
+
+2. **接收与保存**：
    - 接收 `multipart/form-data` 请求
    - multer 保存文件到 `back/public/imagefile-<timestamp>-<rand>.<ext>`
    - 生成图片绝对路径
 
-2. **调用识别算法**：
+3. **调用识别算法**：
    - 后端调用 `runPythonRecognition(absImagePath)`
    - Python 子进程执行：`py -3 opencv/face_get/rec.py <图片路径>`
    - `rec.py` 读取 `trainer.yml`，进行 LBPH 人脸识别
    - 从 stdout 返回 JSON：`{"recognized": true, "userId": 6, "userName": "gpt"}` 或 `{"recognized": false}`
 
-3. **识别成功处理**：
+4. **识别成功处理**：
    - 若 `recognized=true`，查询数据库获取用户信息：`SELECT * FROM user WHERE id = ?`
    - 若用户不存在，返回 500 "用户信息查询失败"
+   - **安全验证（重要）**：
+     - 若当前用户是学生（`userRole === 'student'`），验证识别出的 `userId` 必须等于当前登录的 `userId`
+     - 若验证失败，返回 403 "安全验证失败：只能识别本人的人脸"
+     - 若当前用户是老师（`userRole === 'teacher'`），允许识别任何人（跳过此验证）
    - 若提供了 `taskId`，校验签到任务：
      - 查询任务：`SELECT * FROM attendance_task WHERE id = ? AND classId = ? AND status='active' AND startTime<=NOW() AND endTime>=NOW()`
      - 若任务有效，自动写入签到记录：`INSERT INTO attendance_record (userId, taskId, checkTime, status) VALUES (?, ?, NOW(), 1)`
      - 若任务无效，`attendanceRecorded=false`（不影响识别成功响应）
 
-4. **识别失败处理**：
+5. **识别失败处理**：
    - 若 `recognized=false`，返回 `{"recognized": false, "attendanceRecorded": false}`
    - 不进行签到记录
 
 **实现要点：**
+- **必须登录**：接口使用 `requireLogin` 中间件，未登录会返回 401
+- **身份验证**：学生只能识别本人，老师可以识别任何人
 - 上传字段名必须为 `imagefile`（与后端 `upload.single('imagefile')` 对应）
 - 算法使用 Python 子进程调用，必要时可通过环境变量 `PYTHON_EXE` 指定解释器路径
 - 若提供 `taskId`，后端将校验任务属于该用户班级、状态为 active 且在有效时间窗内
 - 校验通过自动写入 `attendance_record`，失败仅影响 `attendanceRecorded` 字段，不影响识别结果返回
 - 识别失败（`recognized=false`）不是错误，正常返回 200 状态码
+- **前端不需要传 userId**，后端从 Session 自动获取
 
 **前端集成要点：**
+- **必须先登录**：调用此接口前，确保用户已通过 `/api/login` 登录，获取 Session Cookie
+- **Cookie 自动携带**：`uni.request` 和 `uni.uploadFile` 会自动携带 Cookie（包含 Session）
 - 使用 `multipart/form-data` 格式
 - 字段名必须为 `imagefile`（固定，不能修改）
+- **不需要传 userId**，后端从 Session 获取
 - 文件大小限制：<= 20MB
 - 支持格式：`.jpg`, `.jpeg`, `.png`
 - `taskId` 为可选参数，number 类型
+
+**前端调用示例（uni-app）：**
+```javascript
+// 确保用户已登录，然后调用识别接口
+uni.uploadFile({
+    url: 'http://your-server/api/face-recognition',
+    filePath: imagePath,
+    name: 'imagefile',
+    formData: {
+        // 不需要传 userId，后端从 Session 获取
+        taskId: 123  // 可选：签到任务ID
+    },
+    success: (res) => {
+        const data = JSON.parse(res.data);
+        if (data.success) {
+            if (data.data.recognized) {
+                console.log('识别成功:', data.data.userName);
+            } else {
+                console.log('未识别到人脸');
+            }
+        }
+    },
+    fail: (err) => {
+        console.error('请求失败:', err);
+    }
+});
+```
 
 ## 7. 获取班级列表接口
 

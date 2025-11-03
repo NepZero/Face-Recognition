@@ -525,9 +525,11 @@ app.post('/api/face-register', upload.single('imagefile'), async (req, res) => {
 });
 
 // 4. 人脸识别接口（包含签到记录）
-app.post('/api/face-recognition', upload.single('imagefile'), async (req, res) => {
+app.post('/api/face-recognition', requireLogin, upload.single('imagefile'), async (req, res) => {
     try {
         const { taskId } = req.body; // 可选的签到任务ID
+        const currentUserId = req.session.userId; // 当前登录用户ID
+        const currentUserRole = req.session.userRole; // 当前登录用户角色
 
         if (!req.file) {
             return res.status(400).json({
@@ -558,6 +560,23 @@ app.post('/api/face-recognition', upload.single('imagefile'), async (req, res) =
                     }
 
                     const user = rows[0];
+                    
+                    // 安全验证：学生只能识别自己，老师可以识别任何人
+                    if (currentUserRole === 'student') {
+                        // 学生身份验证：识别出的用户必须是当前登录的学生本人
+                        if (Number(recognitionResult.userId) !== Number(currentUserId)) {
+                            return res.status(403).json({
+                                success: false,
+                                message: '安全验证失败：只能识别本人的人脸',
+                                data: {
+                                    recognized: true,
+                                    recognizedUserId: recognitionResult.userId,
+                                    currentUserId: currentUserId
+                                }
+                            });
+                        }
+                    }
+                    // 老师角色不需要此验证，可以识别任何人的脸
 
                     // 验证签到任务（如果提供了taskId）
                     let validTask = true;
