@@ -653,13 +653,15 @@ uni.uploadFile({
 
 **权限要求：** 需要老师登录
 
+**变更摘要（2025-11-03）：**
+- 请求体仅保留一个参数：`duration`（单位：分钟）。
+- `classId` 从 Session 读取（登录成功后已写入 Session）。
+- `startTime`/`endTime` 由后端根据服务器当前时间计算并返回。
+
 **请求参数：**
 ```json
 {
-    "taskName": "签到任务名称",
-    "classId": "目标班级ID",
-    "startTime": "2024-01-01 08:00:00",
-    "endTime": "2024-01-01 09:00:00"
+    "duration": 30
 }
 ```
 
@@ -667,25 +669,13 @@ uni.uploadFile({
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| taskName | string | 是 | 最多 100 字符 |
-| classId | number | 是 | 老师所属班级 ID |
-| startTime | string(datetime) | 是 | 开始时间，YYYY-MM-DD HH:mm:ss |
-| endTime | string(datetime) | 是 | 结束时间，需晚于开始时间 |
-
-**参数说明：**
-- `taskName`: 签到任务名称，最多100字符
-- `classId`: 目标班级ID，必须是存在的班级，且必须是该老师所在的班级
-- `startTime`: 签到开始时间，格式：YYYY-MM-DD HH:mm:ss
-- `endTime`: 签到结束时间，必须晚于开始时间
+| duration | number | 是 | 持续时长（分钟），必须 > 0，最小 1 分钟 |
 
 **业务规则：**
 - 只有老师可以发布签到任务
-- 老师只能为自己所在的班级发布签到任务
-- 任务名称最多100字符
-- 开始时间必须早于结束时间
-- 结束时间必须晚于当前时间
-- 目标班级必须存在且老师必须属于该班级
-- **任务发布成功后，系统会立即通过 Socket.IO 推送给对应班级的所有在线学生**
+- 班级从 Session 获取，老师只能为自己所在的班级发布
+- 开始时间 = 服务器当前时间；结束时间 = 开始时间 + `duration`
+- 任务发布成功后，系统会通过 Socket.IO 推送给对应班级的所有在线学生
 
 **响应示例：**
 
@@ -696,10 +686,10 @@ uni.uploadFile({
     "message": "签到任务发布成功",
     "data": {
         "taskId": 1,
-        "taskName": "上午签到",
+        "taskName": "签到任务-2025-11-03 09:00:00",
         "classId": 1,
-        "startTime": "2024-01-01 08:00:00",
-        "endTime": "2024-01-01 09:00:00"
+        "startTime": "2025-11-03 09:00:00",
+        "endTime": "2025-11-03 09:30:00"
     }
 }
 ```
@@ -717,53 +707,20 @@ uni.uploadFile({
 | success | boolean | 是否成功 |
 | message | string | 提示信息 |
 | data.taskId | number | 新任务 ID |
-| data.taskName | string | 任务名 |
+| data.taskName | string | 任务名（服务端自动生成） |
 | data.classId | number | 班级 ID |
 | data.startTime | string(datetime) | 开始时间 |
 | data.endTime | string(datetime) | 结束时间 |
 
-权限错误示例：
+错误示例：
 ```json
-{
-    "success": false,
-    "message": "只有老师可以发布签到任务"
-}
+{ "success": false, "message": "只有老师可以发布签到任务" }
 ```
-
 ```json
-{
-    "success": false,
-    "message": "您只能为自己所在的班级发布签到任务"
-}
+{ "success": false, "message": "未能确定当前班级，请先设置班级上下文或重新登录" }
 ```
-
-参数错误示例：
 ```json
-{
-    "success": false,
-    "message": "任务名称、班级、开始时间和结束时间不能为空"
-}
-```
-
-```json
-{
-    "success": false,
-    "message": "选择的班级不存在"
-}
-```
-
-```json
-{
-    "success": false,
-    "message": "开始时间必须早于结束时间"
-}
-```
-
-```json
-{
-    "success": false,
-    "message": "结束时间必须晚于当前时间"
-}
+{ "success": false, "message": "请提供有效的持续时长（duration，单位：分钟）" }
 ```
 
 ## 9. 获取签到任务列表接口（支持 Socket.IO）

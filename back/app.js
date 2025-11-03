@@ -668,12 +668,12 @@ app.post('/api/logout', (req, res) => {
     });
 });
 
-// 老师发布签到任务接口
+// 老师发布签到任务接口（仅接收持续时长，班级从 session 获取，时间后端计算）
 app.post('/api/attendance-task', requireLogin, async (req, res) => {
     try {
-        const { taskName, classId, startTime, endTime } = req.body;
         const teacherId = req.session.userId;
         const userRole = req.session.userRole;
+        const sessionClassId = req.session.classId;
 
         // 验证用户是否为老师
         if (userRole !== 'teacher') {
@@ -683,39 +683,53 @@ app.post('/api/attendance-task', requireLogin, async (req, res) => {
             });
         }
 
-        // 验证输入
-        if (!taskName || !classId || !startTime || !endTime) {
+        // 从请求体读取持续时间（单位：分钟），仅接受一个字段 duration
+        const { duration } = req.body || {};
+
+        if (typeof duration !== 'number' || !(duration > 0)) {
             return res.status(400).json({
                 success: false,
-                message: '任务名称、班级、开始时间和结束时间不能为空'
+                message: '请提供有效的持续时长（duration，单位：分钟）'
+            });
+        }
+        const durationMs = Math.floor(duration) * 60 * 1000;
+
+        // 限制最小时长（可按产品调整），不限制最大时长
+        const MIN_MS = 60 * 1000;      // 1 分钟
+        if (durationMs < MIN_MS) {
+            return res.status(400).json({
+                success: false,
+                message: '持续时长不能小于 1 分钟'
             });
         }
 
-        // 验证时间格式和逻辑
-        const start = new Date(startTime);
-        const end = new Date(endTime);
+        // 从 session 读取班级 ID
+        const classId = sessionClassId;
+        if (!classId) {
+            return res.status(422).json({
+                success: false,
+                message: '未能确定当前班级，请先设置班级上下文或重新登录'
+            });
+        }
+
+        // 计算开始与结束时间（以服务器时间为准）
         const now = new Date();
 
-        if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-            return res.status(400).json({
-                success: false,
-                message: '时间格式不正确'
-            });
-        }
+        const formatDateTimeLocal = (date) => {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            const hh = String(date.getHours()).padStart(2, '0');
+            const mm = String(date.getMinutes()).padStart(2, '0');
+            const ss = String(date.getSeconds()).padStart(2, '0');
+            return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
+        };
 
-        if (start >= end) {
-            return res.status(400).json({
-                success: false,
-                message: '开始时间必须早于结束时间'
-            });
-        }
+        const startTime = formatDateTimeLocal(now);
+        const endTime = formatDateTimeLocal(new Date(now.getTime() + durationMs));
 
-        if (end <= now) {
-            return res.status(400).json({
-                success: false,
-                message: '结束时间必须晚于当前时间'
-            });
-        }
+        // 任务名称自动生成（可被前端将来覆盖）
+        const taskName = `签到任务-${formatDateTimeLocal(now)}`;
 
         const connection = await pool.getConnection();
 
@@ -745,14 +759,14 @@ app.post('/api/attendance-task', requireLogin, async (req, res) => {
             }
 
             const teacherClassId = teacherRows[0].classId;
-            if (teacherClassId !== parseInt(classId)) {
+            if (Number(teacherClassId) !== Number(classId)) {
                 return res.status(403).json({
                     success: false,
                     message: '您只能为自己所在的班级发布签到任务'
                 });
             }
 
-            // 创建签到任务
+            // 创建签到任务（保持表结构不变）
             const [result] = await connection.execute(
                 'INSERT INTO attendance_task (taskName, teacherId, classId, startTime, endTime) VALUES (?, ?, ?, ?, ?)',
                 [taskName, teacherId, classId, startTime, endTime]
