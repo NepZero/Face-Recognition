@@ -45,30 +45,40 @@
 		uni.chooseImage({
 			count: 1, //默认9
 			sizeType: ['original', 'compressed'], //可以指定是原图还是压缩图，默认二者都有
-			sourceType: ['camera','album'], 
+			sourceType: ['camera'], 
 			success: function (res) {
 				console.log(JSON.stringify(res.tempFilePaths));
 				const path=res.tempFilePaths[0];
 				console.log(path);
 				uni.uploadFile({
-							url: url.value, //仅为示例，非真实的接口地址
+							url: 'http://'+ip.value+'/api/face-recognition', //仅为示例，非真实的接口地址
 							filePath: path,
 							name: 'imagefile',
-							formData: {
-								'user': 'test'
-							},
+							timeout:10000,
 							success: (res) => {
 								console.log(res)
-								uni.showToast({
-								    title: '上传成功',
-								    icon: 'success'
-								});
+								if(res.success)
+								{
+									uni.showToast({
+									    title: '签到成功',
+									    icon: 'success'
+									});
+								}
+								else
+								{
+									res.data=JSON.parse(res.data)
+									uni.showModal({
+										title: '签到失败',
+										content: res.data['message'],
+										showCancel:false
+									});
+								}
 							},
 							fail:(res)=>{
 								uni.showToast({
-								    title: '上传失败',
-								    icon: 'fail'
-								});
+									title:'签到失败',
+									icon:'error'
+								})
 							},
 							complete:()=>{
 								console.log('buzhidao');
@@ -137,9 +147,37 @@
 		});
 	}
 	
-	function checkClick()
+	function checkClick()		//老师发布签到按钮
 	{
 		console.log(111);
+		uni.request({
+			url:'http://'+ip.value+'/api/attendance-task',
+			method:'POST',
+			timeout:5000,
+			data:{'duration':10},
+			success: (res) => {
+				if(res.success)
+				{
+					uni.showToast({
+						title:"发布签到成功",
+						icon:success
+					})
+				}
+				else
+				{
+					uni.showToast({
+						title:"发布签到失败",
+						icon:success
+					})
+				}
+			},
+			fail: (res) => {
+				uni.showToast({
+					title:"发布签到失败",
+					icon:success
+				})
+			}
+		})
 	}
 </script>
 
