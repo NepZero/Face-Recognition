@@ -5,7 +5,7 @@ class ConfigManager {
   constructor() {
     // 默认配置
     this.defaultConfig = {
-      url: '192.168.15.1:3000',
+	  ip:'192.168.15.1:3000',
 	  id: 0,
 	  name: '游客',
 	  classid: 0,
@@ -69,7 +69,14 @@ class ConfigManager {
   
   // 重置为默认值
   reset() {
+	var temp_ip=this.config.value['ip']
     this.config.value = { ...this.defaultConfig }
+	this.config.value['ip']=temp_ip
+    this.saveToStorage()
+    return this
+  }
+  resetIp() {
+  	this.config.value['ip']=this.defaultConfig['ip']
     this.saveToStorage()
     return this
   }

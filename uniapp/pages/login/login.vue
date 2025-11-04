@@ -23,15 +23,13 @@
 	import { getCurrentInstance } from 'vue'
 	
 	const {proxy}=getCurrentInstance();
-	// const ip=ref('192.168.31.65:3000');
 	const screenHeight=ref();
-	const login_url=computed(()=> 'http://'+proxy.$config.get('url')+'/api/login');
+	const login_url=computed(()=> 'http://'+proxy.$config.get('ip')+'/api/login');
 	const account_value=ref();
 	const password_value=ref();
 	
 	onLoad(()=>{
 		screenHeight.value=uni.getSystemInfoSync().windowHeight;
-		// get_ip();
 	})
 	
 	function login_match()	//登录账号密码检测是否合法
@@ -71,6 +69,7 @@
 			data:{"userAccount":account_value.value,"userPassword":password_value.value},
 		    success: (res) => {
 				res=res.data;
+				console.log(res)
 				if(res.success)
 				{
 					proxy.$config.update({'name':res.data.userName,'id':res.data.userId,'account':res.data.userAccount,'face':res.data.faceRegistered,'classid':res.data.classId,'userRole':res.data.userRole,'class':res.data.className,'isLogin':true})
@@ -92,6 +91,7 @@
 				}
 		    },
 		    fail: (err) => {
+				console.log(err)
 				uni.showToast({
 				    title: '登录失败',
 				    icon: 'error'
@@ -109,16 +109,6 @@
 		url: '../register/register'
 		});
 	}
-	// function get_ip()	//获取服务器ip
-	// {
-	// 	uni.getStorage({
-	// 		key: 'upload_ip',
-	// 		success: function (res) {
-	// 			console.log(res.data);
-	// 			ip.value=res.data;
-	// 		}
-	// 	});
-	// }
 </script>
 
 <style lang='scss' scoped>

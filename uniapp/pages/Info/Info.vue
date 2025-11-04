@@ -50,41 +50,19 @@
 	function netclick() //配置网络按钮
 	{
 		uni.showModal({
-			title: proxy.$config.get('url'),
+			title: proxy.$config.get('ip'),
 			content:'',
 			editable: true,
 			placeholderText:'输入ip',
 			success: (res) => {
 				if(res.confirm)
 				{
-					proxy.$config.set('url',res.content)
+					proxy.$config.set('ip',res.content)
 				}
 			},
 		})
 	}
 	
-	function userInfo_update(flag)	//更新用户信息,flag==1为登录状态 flag==0为登出状态
-	{
-		if(flag)
-		{
-			uni.getStorage({
-				key: 'userInfo',
-				success: function (res) {
-					userInfo.value={
-						'name':res.data['name'],
-						'id':res.data['id'],
-						'classid':res.data['classid'],
-						'face':res.data['face'],
-						'class':res.data['class']
-					}
-				}
-			});
-		}
-		else
-		{
-			userInfo.value={'name':'游客'};
-		}
-	}
 	
 	function login_click()	//登录event
 	{
@@ -95,9 +73,10 @@
 	
 	function logOutClick()	//登出event
 	{
-		logOut('http://'+proxy.$config.get('url')+'/api/logout');
-		proxy.$config.set('isLogin',false);
-		userInfo_update(0);
+		logOut('http://'+proxy.$config.get('ip')+'/api/logout');
+		// proxy.$config.set('isLogin',false);
+		proxy.$config.reset();
+		// userInfo_update(0);
 	}
 	
 	function faceClick()	//人脸注册上传
@@ -109,7 +88,7 @@
 			success: function (res) {
 				const path=res.tempFilePaths[0];
 				uni.uploadFile({
-							url: 'http://'+proxy.$config.get('url')+'/api/face-register',
+							url: 'http://'+proxy.$config.get('ip')+'/api/face-register',
 							filePath: path,
 							name: 'imagefile',
 							formData: {

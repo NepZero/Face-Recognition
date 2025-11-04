@@ -29,7 +29,7 @@
 	})
 	
 	webSocketTask.value= uni.connectSocket({
-		url: proxy.$config.get('url'),
+		url: proxy.$config.get('ip'),
 		header: {
 		    'content-type': 'application/json'
 		},
@@ -65,7 +65,7 @@
 				const path=res.tempFilePaths[0];
 				console.log(path);
 				uni.uploadFile({
-							url: 'http://'+proxy.$config.get('url')+'/api/face-recognition', //仅为示例，非真实的接口地址
+							url: 'http://'+proxy.$config.get('ip')+'/api/face-recognition', //仅为示例，非真实的接口地址
 							filePath: path,
 							name: 'imagefile',
 							timeout:10000,
@@ -105,7 +105,7 @@
 	function testConnection() {		//网络测试
 		connection_flag.value=true;
 	    uni.request({ 
-			url:'http://'+proxy.$config.get('url')+'/send',// 替换为你的电脑IP
+			url:'http://'+proxy.$config.get('ip')+'/send',// 替换为你的电脑IP
 	        method: 'POST',
 			timeout:5000,
 	        success: (res) => {
@@ -132,14 +132,14 @@
 	function ipconfig()
 	{
 		uni.showModal({
-			title: proxy.$config.get('url'),
+			title: proxy.$config.get('ip'),
 			content:'',
 			editable: true,
 			placeholderText:'输入ip',
 			success: (res) => {
 				if(res.confirm)
 				{
-					proxy.$config.set('url',res.content);
+					proxy.$config.set('ip',res.content);
 				}
 			},
 		})
@@ -149,7 +149,7 @@
 	{
 		console.log(111);
 		uni.request({
-			url:'http://'+proxy.$config.get('url')+'/api/attendance-task',
+			url:'http://'+proxy.$config.get('ip')+'/api/attendance-task',
 			method:'POST',
 			timeout:5000,
 			data:{'duration':10},
