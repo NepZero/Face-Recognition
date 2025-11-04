@@ -11,12 +11,14 @@
 	import { onLoad,onShow} from '@dcloudio/uni-app';
 	import {ref,computed} from 'vue';
 	import { isStudent } from '../../utils/utils';
+	import { websocketUtil } from '../../utils/websocket';
 	
-	const ip=ref('192.168.31.65:3000');
+	const ip=ref('192.168.15.1:3000');
 	const url=computed(()=> 'http://'+ip.value+'/send');
 	const connection_flag=ref(false);
 	const screenHeight=ref();
 	const studentFlag=ref(true);
+	const webSocketTask=ref(null)
 	
 	
 	onLoad(()=>{
@@ -27,6 +29,32 @@
 	onShow(()=>{
 		get_ip();
 	})
+	
+	webSocketTask.value= uni.connectSocket({
+		url: ip.value,
+		header: {
+		    'content-type': 'application/json'
+		},
+		success(res) {
+			console.log('成功', res);
+		},
+	})
+	webSocketTask.value.onMessage((res)=>{
+		const data=JSON.parse(res.data);
+		switch(data.type)
+		{
+			case 'new-task':
+				uni.showToast({
+					title:'签到成功',
+					icon:success
+				})
+				break;
+		}
+	})
+	
+	
+	
+	
 	
 	function uploadimg() //拍照签到event
 	{
