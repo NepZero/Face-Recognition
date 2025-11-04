@@ -12,9 +12,9 @@
 	import {ref,computed} from 'vue';
 	import { isStudent } from '../../utils/utils';
 	import { websocketUtil } from '../../utils/websocket';
+	import { getCurrentInstance } from 'vue'
 	
-	const ip=ref('192.168.15.1:3000');
-	const url=computed(()=> 'http://'+ip.value+'/send');
+	const {proxy}=getCurrentInstance();
 	const connection_flag=ref(false);
 	const screenHeight=ref();
 	const studentFlag=ref(true);
@@ -23,20 +23,18 @@
 	
 	onLoad(()=>{
 		screenHeight.value=uni.getSystemInfoSync().windowHeight;
-		get_ip();
 		studentFlag.value=isStudent();
 	})
 	onShow(()=>{
-		get_ip();
 	})
 	
 	webSocketTask.value= uni.connectSocket({
-		url: ip.value,
+		url: proxy.$config.get('url'),
 		header: {
 		    'content-type': 'application/json'
 		},
 		success(res) {
-			console.log('成功', res);
+			console.log('socket连接成功', res);
 		},
 	})
 	webSocketTask.value.onMessage((res)=>{
@@ -58,18 +56,6 @@
 	
 	function uploadimg() //拍照签到event
 	{
-		uni.getStorage({
-			key: 'upload_ip',
-			success: function (res) {
-				if(!res.data)
-				{
-					return;
-				}
-			},
-			fail:function (res){
-				return;
-			}
-		});
 		uni.chooseImage({
 			count: 1, //默认9
 			sizeType: ['original', 'compressed'], //可以指定是原图还是压缩图，默认二者都有
@@ -79,7 +65,7 @@
 				const path=res.tempFilePaths[0];
 				console.log(path);
 				uni.uploadFile({
-							url: 'http://'+ip.value+'/api/face-recognition', //仅为示例，非真实的接口地址
+							url: 'http://'+proxy.$config.get('url')+'/api/face-recognition', //仅为示例，非真实的接口地址
 							filePath: path,
 							name: 'imagefile',
 							timeout:10000,
@@ -118,8 +104,8 @@
 	
 	function testConnection() {		//网络测试
 		connection_flag.value=true;
-	    uni.request({
-	        url: url.value, // 替换为你的电脑IP
+	    uni.request({ 
+			url:'http://'+proxy.$config.get('url')+'/send',// 替换为你的电脑IP
 	        method: 'POST',
 			timeout:5000,
 	        success: (res) => {
@@ -146,40 +132,24 @@
 	function ipconfig()
 	{
 		uni.showModal({
-			title: ip.value,
+			title: proxy.$config.get('url'),
 			content:'',
 			editable: true,
 			placeholderText:'输入ip',
 			success: (res) => {
 				if(res.confirm)
 				{
-					ip.value=res.content;
-					uni.setStorage({
-						key: 'upload_ip',
-						data: ip.value,
-						success: function () {
-							console.log('success');
-						}
-					});
+					proxy.$config.set('url',res.content);
 				}
 			},
 		})
-	}
-	function get_ip()
-	{
-		uni.getStorage({
-			key: 'upload_ip',
-			success: function (res) {
-				ip.value=res.data;
-			}
-		});
 	}
 	
 	function checkClick()		//老师发布签到按钮
 	{
 		console.log(111);
 		uni.request({
-			url:'http://'+ip.value+'/api/attendance-task',
+			url:'http://'+proxy.$config.get('url')+'/api/attendance-task',
 			method:'POST',
 			timeout:5000,
 			data:{'duration':10},

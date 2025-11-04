@@ -1,8 +1,10 @@
 <template>
 	<view class="layout" @touchmove.stop.prevent="() => {}" :style="'height:'+screenHeight+'px!important'">
 		<view class="avater"></view>
-		<view class="name">{{userInfo['name']}}</view>
-		<view class="ip">{{userInfo['class']}}</view>
+		<!-- <view class="name">{{userInfo['name']}}</view> -->
+		<view class="name">{{proxy.$config.get('name')}}</view>
+		<!-- <view class="ip">{{userInfo['class']}}</view> -->
+		<view class="ip">{{proxy.$config.get('class')}}</view>
 		<view class="sections">
 			<view class="login section" @click="login_click">
 				<uni-icons type="right" size="25"></uni-icons>
@@ -16,11 +18,11 @@
 				<uni-icons type="gear-filled" size="25"></uni-icons>
 				<view class="text">设置</view>
 			</view>
-			<view class="faceUpload section" v-if="login_flag" @click="faceClick">
+			<view class="faceUpload section" v-if="proxy.$config.get('isLogin')" @click="faceClick">
 				<uni-icons type="gear-filled" size="25"></uni-icons>
 				<view class="text">上传照片</view>
 			</view>
-			<view class="loginOut section" v-if="login_flag" @click="logOutClick">
+			<view class="loginOut section" v-if="proxy.$config.get('isLogin')" @click="logOutClick">
 				<uni-icons type="gear-filled" size="25"></uni-icons>
 				<view class="text">登出</view>
 			</view>
@@ -31,60 +33,34 @@
 <script setup>
 	import { onLoad,onShow} from '@dcloudio/uni-app';
 	import {ref,computed} from 'vue';
-	import { isLogin,logOut} from '../../utils/utils';
+	import {logOut} from '../../utils/utils';
+	import { getCurrentInstance } from 'vue'
 	
+	const {proxy}=getCurrentInstance();
 	const screenHeight=ref();
-	const ip=ref('192.168.31.65:3000');
-	const url=computed(()=> 'http://'+ip.value+'/send');
-	const login_flag=ref(isLogin() ? true :false);
-	// const login_flag=ref(true);
-	const login_text=computed(()=> login_flag.value ? '切换账号' : '登录/注册');
-	const userInfo=ref({'name':'游客'});
-	const name_text=ref('游客');
+	const login_text=computed(()=> proxy.$config.get('isLogin') ? '切换账号' : '登录/注册');
 	
 	
 	onLoad(()=>{
 		screenHeight.value=uni.getSystemInfoSync().windowHeight;
-		get_ip();
 	})
 	onShow(()=>{
-		get_ip();
-		login_flag.value=isLogin() ? true :false;
-		userInfo_update(login_flag.value);
 	})
 	
-	function netclick()
+	function netclick() //配置网络按钮
 	{
 		uni.showModal({
-			title: ip.value,
+			title: proxy.$config.get('url'),
 			content:'',
 			editable: true,
 			placeholderText:'输入ip',
 			success: (res) => {
 				if(res.confirm)
 				{
-					ip.value=res.content;
-					uni.setStorage({
-						key: 'upload_ip',
-						data: ip.value,
-						success: function () {
-							console.log('success');
-						}
-					});
-
+					proxy.$config.set('url',res.content)
 				}
 			},
 		})
-	}
-	
-	function get_ip()
-	{
-		uni.getStorage({
-			key: 'upload_ip',
-			success: function (res) {
-				ip.value=res.data;
-			}
-		});
 	}
 	
 	function userInfo_update(flag)	//更新用户信息,flag==1为登录状态 flag==0为登出状态
@@ -119,8 +95,8 @@
 	
 	function logOutClick()	//登出event
 	{
-		logOut('http://'+ip.value+'/api/logout');
-		login_flag.value=false;
+		logOut('http://'+proxy.$config.get('url')+'/api/logout');
+		proxy.$config.set('isLogin',false);
 		userInfo_update(0);
 	}
 	
@@ -133,7 +109,7 @@
 			success: function (res) {
 				const path=res.tempFilePaths[0];
 				uni.uploadFile({
-							url: 'http://'+ip.value+'/api/face-register',
+							url: 'http://'+proxy.$config.get('url')+'/api/face-register',
 							filePath: path,
 							name: 'imagefile',
 							formData: {
@@ -159,10 +135,9 @@
 								
 							},
 							fail:(res)=>{
-								res.data=JSON.parse(res.data)
 								uni.showModal({
 									title: '注册人脸失败',
-									content: res.data['message'],
+									content: '请检查网络配置',
 									showCancel:false
 								});
 							},

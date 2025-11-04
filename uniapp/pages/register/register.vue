@@ -34,14 +34,17 @@
 <script setup>
 	import { onLoad,onShow} from '@dcloudio/uni-app';
 	import {ref,computed} from 'vue';
-	const ip=ref('192.168.31.65:3000');
+	import { getCurrentInstance } from 'vue'
+	
+	const {proxy}=getCurrentInstance();
+	// const ip=ref('192.168.31.65:3000');
 	const screenHeight=ref();
 	const username_value=ref();
 	const account_value=ref();
 	const password_value=ref();
 	// const classid_value=ref();
 	const password_again_value=ref();
-	const register_url=computed(()=> 'http://'+ip.value+'/api/register');
+	const register_url=computed(()=> 'http://'+proxy.$config.get('url')+'/api/register');
 	const classInfo=ref([{'id':1,'className':'软件231','classCode':'CS2023-1'}]);
 	const index=ref(0);
 	const classArray = computed(() => classInfo.value.map(item => item.className));
@@ -49,7 +52,7 @@
 	
 	onLoad(()=>{
 		screenHeight.value=uni.getSystemInfoSync().windowHeight;
-		get_ip();
+		// get_ip();
 		getClass();
 	})
 	
@@ -123,21 +126,21 @@
 		});
 	}
 	
-	function get_ip()
-	{
-		uni.getStorage({
-			key: 'upload_ip',
-			success: function (res) {
-				console.log(res.data);
-				ip.value=res.data;
-			}
-		});
-	}
+	// function get_ip()
+	// {
+	// 	uni.getStorage({
+	// 		key: 'upload_ip',
+	// 		success: function (res) {
+	// 			console.log(res.data);
+	// 			ip.value=res.data;
+	// 		}
+	// 	});
+	// }
 	
 	function getClass() //获取班级列表
 	{
 		uni.request({
-		    url: 'http://'+ip.value+'/api/classes', // 
+		    url: 'http://'+proxy.$config.get('url')+'/api/classes', // 
 		    method: 'GET',
 		    success: (res) => {
 				if(res.data.success)

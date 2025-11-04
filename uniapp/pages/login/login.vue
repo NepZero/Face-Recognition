@@ -20,16 +20,18 @@
 	import { onLoad,onShow} from '@dcloudio/uni-app';
 	import {ref,computed} from 'vue';
 	import { loginSet } from '../../utils/utils';
+	import { getCurrentInstance } from 'vue'
 	
-	const ip=ref('192.168.31.65:3000');
+	const {proxy}=getCurrentInstance();
+	// const ip=ref('192.168.31.65:3000');
 	const screenHeight=ref();
-	const login_url=computed(()=> 'http://'+ip.value+'/api/login');
+	const login_url=computed(()=> 'http://'+proxy.$config.get('url')+'/api/login');
 	const account_value=ref();
 	const password_value=ref();
 	
 	onLoad(()=>{
 		screenHeight.value=uni.getSystemInfoSync().windowHeight;
-		get_ip();
+		// get_ip();
 	})
 	
 	function login_match()	//登录账号密码检测是否合法
@@ -71,14 +73,7 @@
 				res=res.data;
 				if(res.success)
 				{
-					uni.setStorage({
-						key: 'userInfo',
-						data: {'name':res.data.userName,'id':res.data.userId,'account':res.data.userAccount,'face':res.data.faceRegistered,'classid':res.data.classId,'userRole':res.data.userRole,'class':res.data.className},
-						success: function () {
-							console.log('setStorage success');
-						}
-					});
-					loginSet(1);
+					proxy.$config.update({'name':res.data.userName,'id':res.data.userId,'account':res.data.userAccount,'face':res.data.faceRegistered,'classid':res.data.classId,'userRole':res.data.userRole,'class':res.data.className,'isLogin':true})
 					uni.showToast({
 					    title: '登录成功',
 					    icon: 'success'
@@ -89,9 +84,10 @@
 				}
 				else
 				{
-					uni.showToast({
-					    title: '登录失败',
-					    icon: 'error'
+					uni.showModal({
+						title: '登录失败',
+						content: res.message,
+						showCancel:false
 					});
 				}
 		    },
@@ -113,16 +109,16 @@
 		url: '../register/register'
 		});
 	}
-	function get_ip()	//获取服务器ip
-	{
-		uni.getStorage({
-			key: 'upload_ip',
-			success: function (res) {
-				console.log(res.data);
-				ip.value=res.data;
-			}
-		});
-	}
+	// function get_ip()	//获取服务器ip
+	// {
+	// 	uni.getStorage({
+	// 		key: 'upload_ip',
+	// 		success: function (res) {
+	// 			console.log(res.data);
+	// 			ip.value=res.data;
+	// 		}
+	// 	});
+	// }
 </script>
 
 <style lang='scss' scoped>

@@ -13,10 +13,17 @@ app.$mount()
 
 // #ifdef VUE3
 import { createSSRApp } from 'vue'
+import { configManager } from './utils/config'
 export function createApp() {
-  const app = createSSRApp(App)
-  return {
-    app
-  }
+	const app = createSSRApp(App)
+	//提供配置管理器给所有组件
+	app.provide('configManager', configManager)
+    
+    // 也可以挂载到全局属性
+    app.config.globalProperties.$config = configManager
+	app.config.globalProperties.$a='okkkkkkkk'
+	return {
+		app
+	}
 }
 // #endif
