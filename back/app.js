@@ -34,19 +34,24 @@ const axios = require('axios');
 const { Server } = require('socket.io');
 const app = express();
 const { spawn } = require('child_process');
+const jwt = require('jsonwebtoken');
+
+// JWT 配置
+const JWT_SECRET = process.env.JWT_SECRET || 'face-recognition-jwt-secret-CHANGE_ME';
+const ACCESS_TOKEN_EXPIRES_IN = process.env.ACCESS_TOKEN_EXPIRES_IN || '2h';
 
 // 中间件
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
-// Session配置
+// 如需兼容旧版，可保留 session 中间件，但后续鉴权改为 JWT
 const sessionMiddleware = session({
     secret: 'my-course-project-secret-key-12345',
     resave: false,
     saveUninitialized: false,
     cookie: {
-        maxAge: 24 * 60 * 60 * 1000 // 24小时
+        maxAge: 24 * 60 * 60 * 1000
     }
 });
 app.use(sessionMiddleware);
@@ -213,15 +218,47 @@ app.use((req, res, next) => {
     next();
 });
 
-// 中间件：验证用户登录状态
-const requireLogin = (req, res, next) => {
-    if (!req.session.userId) {
-        return res.status(401).json({
-            success: false,
-            message: '请先登录'
-        });
+// JWT 工具
+function signAccessToken(user) {
+    const payload = {
+        id: user.id,
+        userAccount: user.userAccount,
+        userName: user.userName,
+        userRole: user.userRole,
+        classId: user.classId,
+        className: user.className || null,
+        faceRegistered: user.faceRegistered
+    };
+    return jwt.sign(payload, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES_IN });
+}
+
+function extractTokenFromRequest(req) {
+    const header = req.headers && (req.headers.authorization || req.headers.Authorization);
+    if (header && header.startsWith('Bearer ')) {
+        return header.substring(7);
     }
-    next();
+    if (req.headers && req.headers['x-access-token']) {
+        return req.headers['x-access-token'];
+    }
+    if (req.cookies && req.cookies.access_token) {
+        return req.cookies.access_token;
+    }
+    return null;
+}
+
+// 中间件：JWT 鉴权
+const requireLogin = (req, res, next) => {
+    const token = extractTokenFromRequest(req);
+    if (!token) {
+        return res.status(401).json({ success: false, message: '未携带访问令牌' });
+    }
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.user = decoded;
+        next();
+    } catch (e) {
+        return res.status(401).json({ success: false, message: '访问令牌无效或已过期' });
+    }
 };
 
 // 1. 用户注册接口
@@ -379,26 +416,22 @@ app.post('/api/login', async (req, res) => {
                 });
             }
 
-            // 将用户信息存储到session
-            req.session.userId = user.id;
-            req.session.userAccount = user.userAccount;
-            req.session.userName = user.userName;
-            req.session.userRole = user.userRole;
-            req.session.classId = user.classId;
-            req.session.className = user.className || null;
-            req.session.faceRegistered = user.faceRegistered;
-
+            const accessToken = signAccessToken(user);
             res.json({
                 success: true,
                 message: '登录成功',
                 data: {
-                    userId: user.id,
-                    userAccount: user.userAccount,
-                    userName: user.userName,
-                    userRole: user.userRole,
-                    classId: user.classId,
-                    className: user.className || null,
-                    faceRegistered: user.faceRegistered
+                    accessToken,
+                    expiresIn: ACCESS_TOKEN_EXPIRES_IN,
+                    user: {
+                        userId: user.id,
+                        userAccount: user.userAccount,
+                        userName: user.userName,
+                        userRole: user.userRole,
+                        classId: user.classId,
+                        className: user.className || null,
+                        faceRegistered: user.faceRegistered
+                    }
                 }
             });
 
@@ -528,8 +561,8 @@ app.post('/api/face-register', upload.single('imagefile'), async (req, res) => {
 app.post('/api/face-recognition', requireLogin, upload.single('imagefile'), async (req, res) => {
     try {
         const { taskId } = req.body; // 可选的签到任务ID
-        const currentUserId = req.session.userId; // 当前登录用户ID
-        const currentUserRole = req.session.userRole; // 当前登录用户角色
+        const currentUserId = req.user.id; // 当前登录用户ID
+        const currentUserRole = req.user.userRole; // 当前登录用户角色
 
         if (!req.file) {
             return res.status(400).json({
@@ -654,26 +687,16 @@ app.post('/api/face-recognition', requireLogin, upload.single('imagefile'), asyn
 
 // 用户登出接口
 app.post('/api/logout', (req, res) => {
-    req.session.destroy((err) => {
-        if (err) {
-            return res.status(500).json({
-                success: false,
-                message: '登出失败'
-            });
-        }
-        res.json({
-            success: true,
-            message: '登出成功'
-        });
-    });
+    // JWT 无状态退出：前端删除令牌即可
+    res.json({ success: true, message: '登出成功' });
 });
 
 // 老师发布签到任务接口（仅接收持续时长，班级从 session 获取，时间后端计算）
 app.post('/api/attendance-task', requireLogin, async (req, res) => {
     try {
-        const teacherId = req.session.userId;
-        const userRole = req.session.userRole;
-        const sessionClassId = req.session.classId;
+        const teacherId = req.user.id;
+        const userRole = req.user.userRole;
+        const sessionClassId = req.user.classId;
 
         // 验证用户是否为老师
         if (userRole !== 'teacher') {
@@ -836,8 +859,8 @@ app.post('/api/attendance-task', requireLogin, async (req, res) => {
 // 获取签到任务列表接口
 app.get('/api/attendance-tasks', requireLogin, async (req, res) => {
     try {
-        const userRole = req.session.userRole;
-        const userId = req.session.userId;
+        const userRole = req.user.userRole;
+        const userId = req.user.id;
         const { status, classId } = req.query;
 
         const connection = await pool.getConnection();
@@ -914,7 +937,7 @@ app.get('/api/attendance-tasks', requireLogin, async (req, res) => {
 // 获取签到统计接口（老师专用）
 app.get('/api/attendance-stats', requireLogin, async (req, res) => {
     try {
-        const userRole = req.session.userRole;
+        const userRole = req.user.userRole;
         const { taskId } = req.query;
 
         if (userRole !== 'teacher') {
@@ -1025,25 +1048,18 @@ app.get('/api/classes', async (req, res) => {
 });
 
 // 获取当前用户信息接口
-app.get('/api/user-info', (req, res) => {
-    if (!req.session.userId) {
-        return res.status(401).json({
-            success: false,
-            message: '未登录'
-        });
-    }
-
+app.get('/api/user-info', requireLogin, (req, res) => {
     res.json({
         success: true,
         message: '获取用户信息成功',
         data: {
-            userId: req.session.userId,
-            userAccount: req.session.userAccount,
-            userName: req.session.userName,
-            userRole: req.session.userRole,
-            classId: req.session.classId,
-            className: req.session.className || null,
-            faceRegistered: req.session.faceRegistered
+            userId: req.user.id,
+            userAccount: req.user.userAccount,
+            userName: req.user.userName,
+            userRole: req.user.userRole,
+            classId: req.user.classId,
+            className: req.user.className || null,
+            faceRegistered: req.user.faceRegistered
         }
     });
 });
@@ -1106,74 +1122,30 @@ const io = new Server(httpServer, {
     transports: ['websocket', 'polling']
 });
 
-// Socket.IO 中间件：身份验证（共享 Express Session）
-// 将 Express session 中间件转换为 Socket.IO 中间件
+// Socket.IO 中间件：使用 JWT 进行身份验证
 io.use((socket, next) => {
-    const req = socket.request;
-    
-    // 调试信息：打印请求头
-    console.log('[Socket.IO Auth] 握手请求头:', {
-        cookie: req.headers.cookie ? req.headers.cookie.substring(0, 80) + '...' : '无',
-        'user-agent': req.headers['user-agent'],
-        'all-headers': Object.keys(req.headers)
-    });
-    
-    // 手动解析 Cookie（确保 cookie-parser 已处理，如果没有则手动解析）
-    if (!req.headers.cookie) {
-        console.error('[Socket.IO Auth] 错误: 请求头中未找到 cookie');
-        return next(new Error('未找到 session cookie'));
-    }
-    
-    // 确保 cookie-parser 已处理 Cookie（如果没有，手动调用）
-    if (typeof req.cookies === 'undefined') {
-        // 如果没有 cookie-parser 处理过，手动解析 Cookie
-        const cookies = {};
-        req.headers.cookie.split(';').forEach(cookie => {
-            const parts = cookie.trim().split('=');
-            if (parts.length === 2) {
-                cookies[parts[0]] = decodeURIComponent(parts[1]);
-            }
-        });
-        req.cookies = cookies;
-    }
-    
-    // 创建一个 response 对象
-    const res = {
-        end: () => {},
-        writeHead: () => {},
-        cookie: () => {},
-        setHeader: () => {}
-    };
-    
-    // 使用 session 中间件解析 session
-    sessionMiddleware(req, res, () => {
-        if (req.session && req.session.userId) {
-            // 将用户信息附加到 socket
-            socket.userId = req.session.userId;
-            socket.userAccount = req.session.userAccount;
-            socket.userName = req.session.userName;
-            socket.userRole = req.session.userRole;
-            socket.classId = req.session.classId;
-            socket.className = req.session.className;
-            socket.request = req; // 保存 request 对象
-            
-            console.log('[Socket.IO Auth] 身份验证成功:', {
-                userId: socket.userId,
-                userAccount: socket.userAccount,
-                userRole: socket.userRole
-            });
-            
-            next();
-        } else {
-            console.error('[Socket.IO Auth] 错误: Session 无效或未登录', {
-                hasSession: !!req.session,
-                sessionKeys: req.session ? Object.keys(req.session) : [],
-                cookies: req.cookies,
-                cookieHeader: req.headers.cookie
-            });
-            next(new Error('未登录或 session 无效'));
+    try {
+        const auth = socket.handshake && socket.handshake.auth || {};
+        const headers = socket.handshake && socket.handshake.headers || {};
+        let token = auth.token;
+        const headerAuth = headers.authorization || headers.Authorization;
+        if (!token && headerAuth && headerAuth.startsWith('Bearer ')) {
+            token = headerAuth.substring(7);
         }
-    });
+        if (!token) {
+            return next(new Error('未提供访问令牌'));
+        }
+        const decoded = jwt.verify(token, JWT_SECRET);
+        socket.userId = decoded.id;
+        socket.userAccount = decoded.userAccount;
+        socket.userName = decoded.userName;
+        socket.userRole = decoded.userRole;
+        socket.classId = decoded.classId;
+        socket.className = decoded.className;
+        return next();
+    } catch (e) {
+        return next(new Error('访问令牌无效或已过期'));
+    }
 });
 
 // 用于存储 Socket.IO 的全局变量，供其他模块使用

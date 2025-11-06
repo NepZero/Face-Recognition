@@ -122,72 +122,41 @@
 | userAccount | string | 是 | 登录账号 |
 | userPassword | string | 是 | 登录密码 |
 
-**响应示例：**
-
-学生登录成功：
+**响应示例（JWT）:**
 ```json
 {
-    "success": true,
-    "message": "登录成功",
-    "data": {
-        "userId": 1,
-        "userAccount": "student001",
-        "userName": "张三",
-        "userRole": "student",
-        "classId": 1,
-        "className": "计算机科学与技术2023级1班",
-        "faceRegistered": 0
+  "success": true,
+  "message": "登录成功",
+  "data": {
+    "accessToken": "<JWT>",
+    "expiresIn": "2h",
+    "user": {
+      "userId": 1,
+      "userAccount": "student001",
+      "userName": "张三",
+      "userRole": "student",
+      "classId": 1,
+      "className": "计算机科学与技术2023级1班",
+      "faceRegistered": 0
     }
+  }
 }
 ```
 
-**响应字段类型：**
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| success | boolean | 是否成功 |
-| message | string | 提示信息 |
-| data.userId | number | 用户 ID |
-| data.userAccount | string | 账号 |
-| data.userName | string | 姓名 |
-| data.userRole | string | 角色：student/teacher |
-| data.classId | number | 班级 ID |
-| data.className | string/null | 班级名称，老师可能为null |
-| data.faceRegistered | number | 是否注册人脸：0/1 |
-
-老师登录成功：
-```json
-{
-    "success": true,
-    "message": "登录成功",
-    "data": {
-        "userId": 6,
-        "userAccount": "teacher001",
-        "userName": "张老师",
-        "userRole": "teacher",
-        "classId": 1,
-        "className": "计算机科学与技术2023级1班",
-        "faceRegistered": 0
-    }
-}
+**使用说明**：登录成功后请保存 `data.accessToken`，后续调用受保护接口需在请求头携带：
 ```
-
-（字段类型同上）
-
-**注意**：登录成功后，系统会自动创建Session，浏览器会保存Session Cookie，后续请求会自动携带，无需手动处理认证信息。
+Authorization: Bearer <accessToken>
+```
 
 ## 3. 用户登出接口
 
 **接口地址：** `POST /api/logout`
 
-**请求参数：** 无需参数，使用Session认证
+**请求参数：** 无
 
 **响应示例：**
 ```json
-{
-    "success": true,
-    "message": "登出成功"
-}
+{ "success": true, "message": "登出成功" }
 ```
 
 **响应字段类型：**
@@ -197,13 +166,13 @@
 | success | boolean | 是否成功 |
 | message | string | 提示信息 |
 
-**注意**：登出后Session会被销毁，需要重新登录才能访问需要认证的接口。
+**注意**：JWT 为无状态，登出本质为前端删除本地 token；此接口固定返回成功。
 
 ## 4. 获取用户信息接口
 
 **接口地址：** `GET /api/user-info`
 
-**请求参数：** 无需参数，使用Session认证
+**鉴权**：请求头携带 `Authorization: Bearer <accessToken>`
 
 **响应示例：**
 
@@ -238,11 +207,11 @@
 | data.className | string/null | 班级名称，可能为null |
 | data.faceRegistered | number | 是否注册人脸：0/1 |
 
-未登录：
+未携带/无效 token：
 ```json
 {
-    "success": false,
-    "message": "未登录"
+  "success": false,
+  "message": "访问令牌无效或已过期"
 }
 ```
 
@@ -404,12 +373,12 @@
 
 **请求方式：** `multipart/form-data`
 
-**权限要求：** **需要登录**（通过 Session Cookie 验证）
+**权限要求：** **需要登录**（JWT，`Authorization: Bearer <token>`）
 
 **安全机制：**
 - **学生用户**：只能识别本人的人脸，上传他人照片会被拒绝（403错误）
 - **老师用户**：可以识别任何人的脸（用于管理、测试等场景）
-- 用户身份通过 Session 自动识别，前端**无需传 userId**
+- 用户身份通过 JWT 自动识别，前端**无需传 userId**
 
 **行为摘要：**
 - 接收上传的人脸图片
@@ -431,7 +400,7 @@
 - `taskId`: 签到任务ID（可选）
 
 **注意：**
-- 前端**不需要传 userId**，后端从 Session 中自动获取当前登录用户信息
+- 前端**不需要传 userId**，后端从 JWT 中自动获取当前登录用户信息
 - 请求会自动携带登录时设置的 Session Cookie
 
 **字段类型：**
@@ -522,7 +491,7 @@
 
 | 错误信息 | HTTP 状态码 | 可能原因 | 解决方案 |
 | --- | --- | --- | --- |
-| `请先登录` | 401 | 未登录或 Session 过期 | 先调用登录接口 `/api/login`，获取 Session Cookie |
+| `未携带访问令牌`/`访问令牌无效或已过期` | 401 | 未登录或 token 过期 | 先登录获取 `accessToken` 并以 `Authorization` 头携带 |
 | `未收到图片文件` | 400 | `imagefile` 字段缺失或为空 | 检查前端上传代码，确保字段名为 `imagefile` |
 | `安全验证失败：只能识别本人的人脸` | 403 | 学生用户上传了他人的照片 | 确保上传的是本人照片，或使用老师账号进行识别 |
 | `用户信息查询失败` | 500 | 算法识别出的 `userId` 在数据库不存在 | 1. 检查训练集文件名的 `id` 是否与数据库对齐<br>2. 确认数据库中是否存在该用户<br>3. 重新训练模型 |
@@ -531,9 +500,8 @@
 **业务逻辑：**
 
 1. **身份验证**：
-   - 检查 Session 中是否存在 `userId`（通过 `requireLogin` 中间件）
-   - 若未登录，返回 401 "请先登录"
-   - 从 Session 获取当前用户信息：`userId` 和 `userRole`
+- 校验 `Authorization` 头的 JWT，解析 `userId` 和 `userRole`
+- 若未携带或无效，返回 401
 
 2. **接收与保存**：
    - 接收 `multipart/form-data` 请求
@@ -563,7 +531,7 @@
    - 不进行签到记录
 
 **实现要点：**
-- **必须登录**：接口使用 `requireLogin` 中间件，未登录会返回 401
+- **必须登录**：接口使用 JWT 鉴权中间件，未登录会返回 401
 - **身份验证**：学生只能识别本人，老师可以识别任何人
 - 上传字段名必须为 `imagefile`（与后端 `upload.single('imagefile')` 对应）
 - 算法使用 Python 子进程调用，必要时可通过环境变量 `PYTHON_EXE` 指定解释器路径
@@ -573,8 +541,8 @@
 - **前端不需要传 userId**，后端从 Session 自动获取
 
 **前端集成要点：**
-- **必须先登录**：调用此接口前，确保用户已通过 `/api/login` 登录，获取 Session Cookie
-- **Cookie 自动携带**：`uni.request` 和 `uni.uploadFile` 会自动携带 Cookie（包含 Session）
+- **必须先登录**：先通过 `/api/login` 获取 `accessToken`
+- **在请求头携带**：`Authorization: Bearer <accessToken>`（包括 `uni.uploadFile` 需自定义 header）
 - 使用 `multipart/form-data` 格式
 - 字段名必须为 `imagefile`（固定，不能修改）
 - **不需要传 userId**，后端从 Session 获取
@@ -874,17 +842,17 @@ uni.uploadFile({
 
 **连接地址：** `ws://your-server:3000` 或 `http://your-server:3000`
 
-**权限要求：** 需要登录（通过 Session Cookie 认证）
+**权限要求：** 需要登录（通过 JWT 认证）
 
 ### 连接说明
 
-Socket.IO 连接时会自动验证用户的 Session，只有已登录的用户才能连接。连接成功后，学生会自动加入对应班级的房间。
+Socket.IO 连接时通过 JWT 验证用户。连接成功后，学生会自动加入对应班级的房间。
 
 ### 连接建立流程
 
 #### 步骤1：用户登录（必须先登录）
 
-客户端必须先通过 REST API 登录，获取 Session Cookie：
+客户端通过 REST API 登录，获取 `accessToken`：
 
 ```javascript
 // 1. 调用登录接口
@@ -893,7 +861,7 @@ const response = await fetch('http://localhost:3000/api/login', {
     headers: {
         'Content-Type': 'application/json'
     },
-    credentials: 'include',  // 重要：携带 Cookie
+    // 不需要 Cookie
     body: JSON.stringify({
         userAccount: 'student001',
         userPassword: '123456'
@@ -901,20 +869,20 @@ const response = await fetch('http://localhost:3000/api/login', {
 });
 
 const result = await response.json();
-// 登录成功后，浏览器会自动保存 Session Cookie
+const { accessToken } = (await response.json()).data;
 ```
 
 #### 步骤2：建立 Socket.IO 连接
 
-登录成功后，客户端建立 Socket.IO 连接：
+登录成功后，客户端建立 Socket.IO 连接并传入 token：
 
 ```javascript
 import io from 'socket.io-client';
 
 // 连接 Socket.IO（使用与 REST API 相同的地址）
 const socket = io('http://localhost:3000', {
-    withCredentials: true,  // 重要：自动携带 Cookie
-    transports: ['websocket', 'polling']  // 支持两种传输方式
+    transports: ['polling','websocket'],
+    auth: { token: accessToken }
 });
 ```
 
