@@ -1,5 +1,6 @@
 node_modules/
 temp/
+unpackage/
 
 # 后端临时上传的用户照片文件
 back/public/*.jpg
