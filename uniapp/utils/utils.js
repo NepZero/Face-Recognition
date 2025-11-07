@@ -84,3 +84,23 @@ export function tokenGet()
 {
 	return 'Bearer ' + uni.getStorageSync('token');
 }
+
+export function getTasks(url)
+{
+	uni.request({
+		url:url,
+		method:'POST',
+		timeout:5000,
+		header:{'Authorization':tokenGet()},
+		success: (res) => {
+			if(res.success)
+			{
+			}
+			else
+			{
+			}
+		},
+		fail: (res) => {
+		}
+	})
+}

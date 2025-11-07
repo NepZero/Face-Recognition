@@ -1,6 +1,9 @@
 <template>
 	<view class="layout" @touchmove.stop.prevent="() => {}" :style="'height:'+screenHeight+'px!important'">
-		<button class='loadbutton' size="default" @click="uploadimg">拍照签到</button>
+		<button class='loadbutton' size="default" @click="uploadimg">
+			<text>拍照签到</text>
+			<view class="dot" v-if="task_flag"></view>
+		</button>
 		<button size="default" @click="testConnection" :loading=connection_flag>网络测试</button>
 		<button size="default" @click="ipconfig">网络配置</button>
 		<button size="default" @click="checkClick" v-if="!studentFlag">发布签到</button>
@@ -19,6 +22,7 @@
 	const connection_flag=ref(false);
 	const screenHeight=ref();
 	const studentFlag=ref(true);
+	const task_flag=ref(false);
 	
 	
 	onLoad(()=>{
@@ -27,7 +31,7 @@
 	})
 	onShow(()=>{
 	})
-	
+	setInterval(getTasks, 5000);
 	
 	
 	
@@ -127,12 +131,12 @@
 	
 	function checkClick()		//老师发布签到按钮
 	{
-		console.log(111);
 		uni.request({
 			url:'http://'+proxy.$config.get('ip')+'/api/attendance-task',
 			method:'POST',
 			timeout:5000,
 			data:{'duration':10},
+			header:{'Authorization':tokenGet()},
 			success: (res) => {
 				if(res.success)
 				{
@@ -166,6 +170,23 @@
 	// 		timeout:5000,
 	// 	})
 	// }
+	function getTasks()		//获取签到消息
+	{
+		uni.request({
+			url:'http://'+proxy.$config.get('ip')+'/api/attendance-tasks',
+			method:'POST',
+			timeout:5000,
+			header:{'Authorization':tokenGet()},
+			success: (res) => {
+				if(res.success)
+				{
+					task_flag.value=true;
+				}
+			},
+			fail: (res) => {
+			}
+		})
+	}
 </script>
 
 <style lang='scss' scoped>
@@ -186,6 +207,15 @@
 		}
 		.loadbutton{
 			margin-top: 300rpx;
+			.dot{
+				position: absolute;
+				top: 70rpx;
+				right: 45rpx;
+				width: 20rpx;
+				height: 20rpx;
+				background-color: #FF3B30;
+				border-radius: 50%;
+			}
 		}
 	}
 </style>
