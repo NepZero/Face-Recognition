@@ -81,6 +81,7 @@
 	
 	function faceClick()	//人脸注册上传
 	{
+		console.log(proxy.$config.get('ip'))
 		uni.chooseImage({
 			count: 1, //默认9
 			sizeType: ['original', 'compressed'], //可以指定是原图还是压缩图，默认二者都有
@@ -92,7 +93,7 @@
 							filePath: path,
 							name: 'imagefile',
 							formData: {
-								'userId':userInfo.value.id
+								'userId':proxy.$config.get('id')
 							},
 							success: (res) => {
 								if(res.statusCode==200)

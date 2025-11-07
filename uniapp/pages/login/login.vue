@@ -21,6 +21,7 @@
 	import {ref,computed} from 'vue';
 	import { loginSet } from '../../utils/utils';
 	import { getCurrentInstance } from 'vue'
+	import { tokenSave } from '../../utils/utils';
 	
 	const {proxy}=getCurrentInstance();
 	const screenHeight=ref();
@@ -69,10 +70,10 @@
 			data:{"userAccount":account_value.value,"userPassword":password_value.value},
 		    success: (res) => {
 				res=res.data;
-				console.log(res)
 				if(res.success)
 				{
-					proxy.$config.update({'name':res.data.userName,'id':res.data.userId,'account':res.data.userAccount,'face':res.data.faceRegistered,'classid':res.data.classId,'userRole':res.data.userRole,'class':res.data.className,'isLogin':true})
+					proxy.$config.update({'name':res.data.user.userName,'id':res.data.user.userId,'account':res.data.user.userAccount,'face':res.data.user.faceRegistered,'classid':res.data.user.classId,'userRole':res.data.user.userRole,'class':res.data.user.className,'isLogin':true})
+					tokenSave(res.data.accessToken);
 					uni.showToast({
 					    title: '登录成功',
 					    icon: 'success'

@@ -68,3 +68,19 @@ export function isStudent()	//是否是学生
 		return true;
 	}
 }
+
+export function tokenSave(token)
+{
+	try {
+	// 将数据存储到本地缓存
+		uni.setStorageSync('token', token);
+		console.log('token存储成功');
+	} catch (e) {
+		console.error('存储失败：', e);
+	}
+}
+
+export function tokenGet()
+{
+	return 'Bearer ' + uni.getStorageSync('token');
+}

@@ -4,6 +4,7 @@
 		<button size="default" @click="testConnection" :loading=connection_flag>网络测试</button>
 		<button size="default" @click="ipconfig">网络配置</button>
 		<button size="default" @click="checkClick" v-if="!studentFlag">发布签到</button>
+		<!-- <button size="default" @click="testClick">用户信息</button> -->
 	</view>
 </template>
 
@@ -11,14 +12,13 @@
 	import { onLoad,onShow} from '@dcloudio/uni-app';
 	import {ref,computed} from 'vue';
 	import { isStudent } from '../../utils/utils';
-	import { websocketUtil } from '../../utils/websocket';
 	import { getCurrentInstance } from 'vue'
+	import { tokenGet } from '../../utils/utils';
 	
 	const {proxy}=getCurrentInstance();
 	const connection_flag=ref(false);
 	const screenHeight=ref();
 	const studentFlag=ref(true);
-	const webSocketTask=ref(null)
 	
 	
 	onLoad(()=>{
@@ -26,28 +26,6 @@
 		studentFlag.value=isStudent();
 	})
 	onShow(()=>{
-	})
-	
-	webSocketTask.value= uni.connectSocket({
-		url: proxy.$config.get('ip'),
-		header: {
-		    'content-type': 'application/json'
-		},
-		success(res) {
-			console.log('socket连接成功', res);
-		},
-	})
-	webSocketTask.value.onMessage((res)=>{
-		const data=JSON.parse(res.data);
-		switch(data.type)
-		{
-			case 'new-task':
-				uni.showToast({
-					title:'签到成功',
-					icon:success
-				})
-				break;
-		}
 	})
 	
 	
@@ -61,12 +39,14 @@
 			sizeType: ['original', 'compressed'], //可以指定是原图还是压缩图，默认二者都有
 			sourceType: ['camera'], 
 			success: function (res) {
-				console.log(JSON.stringify(res.tempFilePaths));
+				console.log(tokenGet())
 				const path=res.tempFilePaths[0];
 				console.log(path);
 				uni.uploadFile({
 							url: 'http://'+proxy.$config.get('ip')+'/api/face-recognition', //仅为示例，非真实的接口地址
 							filePath: path,
+							header:{'Authorization':tokenGet()},
+							// formData:{'Authorization':tokenGet()},
 							name: 'imagefile',
 							timeout:10000,
 							success: (res) => {
@@ -177,6 +157,15 @@
 			}
 		})
 	}
+	
+	// function testClick()
+	// {
+	// 	uni.request({
+	// 		url:'http://'+proxy.$config.get('ip')+'/api/user-info',
+	// 		method:'POST',
+	// 		timeout:5000,
+	// 	})
+	// }
 </script>
 
 <style lang='scss' scoped>
