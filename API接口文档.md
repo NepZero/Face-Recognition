@@ -5,8 +5,8 @@
 本系统提供完整的用户管理、角色权限、班级管理和签到功能。支持学生和老师两种角色，老师可以发布签到任务，学生通过人脸识别进行签到。
 
 **通信方式**：
-- **RESTful API**：用于数据查询、提交操作（签到提交、统计查询等）
-- **Socket.IO 实时通信**：用于任务实时推送，学生无需轮询即可收到新任务通知
+- **RESTful API**：用于数据查询、提交操作（签到提交、统计查询等），所有需要登录的接口必须在请求头携带 `Authorization: Bearer <JWT>`
+- **Socket.IO 实时通信**：用于任务实时推送，学生无需轮询即可收到新任务通知，连接时需携带 JWT
 
 **推荐使用方式**：
 - 实时任务推送：使用 Socket.IO（避免频繁轮询）
@@ -16,6 +16,13 @@
 
 - **学生 (student)**: 注册时必须选择班级，可以查看自己班级的签到任务并进行签到
 - **老师 (teacher)**: 预置账号，可以发布签到任务、查看签到统计
+
+## 鉴权约定
+
+- 用户登录成功后会获得 `accessToken`（JWT），有效期默认 2 小时。
+- 需要登录的 REST 接口必须在请求头添加 `Authorization: Bearer <accessToken>`。
+- Socket.IO 连接、事件也需在 `auth` 字段传入 `token`。
+- 如果未携带或令牌过期，接口会返回 `401`（`success=false`，`message` 提示无效或过期）。
 
 ## 数据库表结构
 
@@ -382,7 +389,7 @@ Authorization: Bearer <accessToken>
 
 **行为摘要：**
 - 接收上传的人脸图片
-- 验证用户登录状态（Session）
+- 验证用户登录状态（JWT）
 - 调用 Python 识别脚本 `rec.py` 进行人脸识别
 - 验证识别结果是否符合安全规则（学生只能识别自己）
 - 识别成功后查询用户信息
@@ -401,7 +408,7 @@ Authorization: Bearer <accessToken>
 
 **注意：**
 - 前端**不需要传 userId**，后端从 JWT 中自动获取当前登录用户信息
-- 请求会自动携带登录时设置的 Session Cookie
+- 请求头需要携带 `Authorization: Bearer <accessToken>`（`uni.uploadFile` 需自定义 header）
 
 **字段类型：**
 
@@ -531,21 +538,20 @@ Authorization: Bearer <accessToken>
    - 不进行签到记录
 
 **实现要点：**
-- **必须登录**：接口使用 JWT 鉴权中间件，未登录会返回 401
 - **身份验证**：学生只能识别本人，老师可以识别任何人
 - 上传字段名必须为 `imagefile`（与后端 `upload.single('imagefile')` 对应）
 - 算法使用 Python 子进程调用，必要时可通过环境变量 `PYTHON_EXE` 指定解释器路径
 - 若提供 `taskId`，后端将校验任务属于该用户班级、状态为 active 且在有效时间窗内
 - 校验通过自动写入 `attendance_record`，失败仅影响 `attendanceRecorded` 字段，不影响识别结果返回
 - 识别失败（`recognized=false`）不是错误，正常返回 200 状态码
-- **前端不需要传 userId**，后端从 Session 自动获取
+- **前端不需要传 userId**，后端从 JWT 解析当前用户
 
 **前端集成要点：**
 - **必须先登录**：先通过 `/api/login` 获取 `accessToken`
 - **在请求头携带**：`Authorization: Bearer <accessToken>`（包括 `uni.uploadFile` 需自定义 header）
 - 使用 `multipart/form-data` 格式
 - 字段名必须为 `imagefile`（固定，不能修改）
-- **不需要传 userId**，后端从 Session 获取
+- **不需要传 userId**，后端从 JWT 获取当前用户
 - 文件大小限制：<= 20MB
 - 支持格式：`.jpg`, `.jpeg`, `.png`
 - `taskId` 为可选参数，number 类型
@@ -558,7 +564,7 @@ uni.uploadFile({
     filePath: imagePath,
     name: 'imagefile',
     formData: {
-        // 不需要传 userId，后端从 Session 获取
+        // 不需要传 userId，后端会从 JWT 解析
         taskId: 123  // 可选：签到任务ID
     },
     success: (res) => {
@@ -619,11 +625,11 @@ uni.uploadFile({
 
 **接口地址：** `POST /api/attendance-task`
 
-**权限要求：** 需要老师登录
+**权限要求：** 需要老师登录（请求头携带 `Authorization: Bearer <accessToken>`）
 
 **变更摘要（2025-11-03）：**
 - 请求体仅保留一个参数：`duration`（单位：分钟）。
-- `classId` 从 Session 读取（登录成功后已写入 Session）。
+- `classId` 从 JWT 解析的用户信息读取（无需前端传递）。
 - `startTime`/`endTime` 由后端根据服务器当前时间计算并返回。
 
 **请求参数：**
@@ -641,7 +647,7 @@ uni.uploadFile({
 
 **业务规则：**
 - 只有老师可以发布签到任务
-- 班级从 Session 获取，老师只能为自己所在的班级发布
+- 班级从 JWT 解析的用户信息获取，老师只能为自己所在的班级发布
 - 开始时间 = 服务器当前时间；结束时间 = 开始时间 + `duration`
 - 任务发布成功后，系统会通过 Socket.IO 推送给对应班级的所有在线学生
 
@@ -698,19 +704,17 @@ uni.uploadFile({
 **权限要求：** 需要登录
 
 **请求参数：**
-- `status`: 可选，任务状态筛选（active/inactive/completed）
 - `classId`: 可选，班级ID筛选（仅老师可用）
 
 **字段类型：**
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| status | string | 否 | active/inactive/completed |
 | classId | number | 否 | 仅老师可用的筛选条件 |
 
 **功能说明：**
-- 老师：查看自己发布的任务
-- 学生：查看自己班级的任务
+- 老师：查看自己发布的任务，`status` 字段仅区分 `active`（未过期）与 `inactive`（已过期）
+- 学生：查看自己班级的任务，`status` 可能为 `active`（未过期未签到）、`inactive`（已过期未签到）、`completed`（已签到）
 
 **Socket.IO 方式（推荐）**：
 学生也可以通过 Socket.IO 请求任务列表，发送 `get-tasks` 事件，监听 `tasks-response` 响应（详见"11. Socket.IO 实时通信接口"）。
@@ -752,7 +756,7 @@ uni.uploadFile({
 | data[].classId | number | 班级 ID |
 | data[].startTime | string(datetime) | 开始时间 |
 | data[].endTime | string(datetime) | 结束时间 |
-| data[].status | string | 任务状态 |
+| data[].status | string | 任务状态（`active` / `inactive` / `completed`） |
 | data[].className | string | 班级名 |
 | data[].teacherName | string | 老师名 |
 
@@ -911,8 +915,8 @@ socket.on('connected', (data) => {
 socket.on('connect_error', (error) => {
     console.error('Socket 连接失败:', error);
     // 可能的原因：
-    // 1. 未登录（没有 Session Cookie）
-    // 2. Session 已过期
+    // 1. 未登录或未携带 token
+    // 2. token 已过期
     // 3. 服务器未启动
 });
 ```
@@ -922,61 +926,61 @@ socket.on('connect_error', (error) => {
 ```javascript
 // 完整的连接流程示例
 
-// 步骤1：登录获取 Session
+// 步骤1：登录获取 accessToken
 async function login() {
     const response = await fetch('http://localhost:3000/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
             userAccount: 'student001',
             userPassword: '123456'
         })
     });
-    
+
     const result = await response.json();
-    if (result.success) {
-        console.log('登录成功');
-        return true;
+    if (!result.success) {
+        throw new Error(result.message || '登录失败');
     }
-    return false;
+
+    console.log('登录成功');
+    return result.data.accessToken;
 }
 
-// 步骤2：连接 Socket.IO
-function connectSocket() {
+// 步骤2：连接 Socket.IO（携带 token）
+function connectSocket(accessToken) {
     const socket = io('http://localhost:3000', {
-        withCredentials: true,
-        transports: ['websocket', 'polling']
+        transports: ['websocket', 'polling'],
+        auth: { token: accessToken }
     });
-    
+
     // 连接成功
     socket.on('connect', () => {
         console.log('Socket 连接成功');
     });
-    
+
     // 身份验证成功
     socket.on('connected', (data) => {
         if (data.success) {
             console.log('身份验证成功');
             console.log('房间:', data.room);
             console.log('用户信息:', data.userInfo);
-            
+
             // 可以开始监听其他事件了
             setupEventListeners(socket);
         }
     });
-    
+
     // 连接错误
     socket.on('connect_error', (error) => {
         console.error('连接失败:', error.message);
-        // 提示：可能需要重新登录
+        // 提示：token 可能已过期，需要重新登录刷新
     });
-    
+
     // 断开连接
     socket.on('disconnect', (reason) => {
         console.log('连接断开:', reason);
     });
-    
+
     return socket;
 }
 
@@ -992,13 +996,11 @@ function setupEventListeners(socket) {
 
 // 使用示例
 async function init() {
-    // 先登录
-    const loginSuccess = await login();
-    if (loginSuccess) {
-        // 登录成功后再连接 Socket
-        const socket = connectSocket();
-    } else {
-        console.error('登录失败，无法连接 Socket');
+    try {
+        const accessToken = await login();
+        connectSocket(accessToken);
+    } catch (error) {
+        console.error('登录失败，无法连接 Socket', error);
     }
 }
 
@@ -1099,7 +1101,7 @@ init();
 
 ### 注意事项
 
-1. **Session 共享**：Socket.IO 通过 Cookie 共享 Express Session，需要确保 Cookie 正确传递
+1. **身份验证**：Socket.IO 连接时通过 JWT 认证，需要在 `auth.token` 中携带有效的 accessToken
 2. **跨域配置**：Socket.IO 已配置 CORS，允许跨域访问
 3. **房间管理**：学生连接后自动加入 `class-{classId}` 房间
 4. **自动重连**：Socket.IO 客户端默认支持自动重连

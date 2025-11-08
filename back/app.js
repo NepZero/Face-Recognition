@@ -861,7 +861,7 @@ app.get('/api/attendance-tasks', requireLogin, async (req, res) => {
     try {
         const userRole = req.user.userRole;
         const userId = req.user.id;
-        const { status, classId } = req.query;
+        const { classId } = req.query;
 
         const connection = await pool.getConnection();
 
@@ -880,10 +880,6 @@ app.get('/api/attendance-tasks', requireLogin, async (req, res) => {
                 `;
                 params = [userId];
 
-                if (status) {
-                    query += ' AND at.status = ?';
-                    params.push(status);
-                }
                 if (classId) {
                     query += ' AND at.classId = ?';
                     params.push(classId);
@@ -891,19 +887,19 @@ app.get('/api/attendance-tasks', requireLogin, async (req, res) => {
             } else if (userRole === 'student') {
                 // 学生查看自己班级的任务
                 query = `
-                    SELECT at.*, c.className, u.userName as teacherName
+                    SELECT at.*, c.className, u.userName as teacherName,
+                           CASE WHEN EXISTS (
+                               SELECT 1
+                               FROM attendance_record ar
+                               WHERE ar.taskId = at.id AND ar.userId = ? AND ar.status = 1
+                           ) THEN 1 ELSE 0 END AS hasCheckedIn
                     FROM attendance_task at
                     LEFT JOIN class c ON at.classId = c.id
                     LEFT JOIN user u ON at.teacherId = u.id
                     LEFT JOIN user student ON student.id = ?
                     WHERE at.classId = student.classId
                 `;
-                params = [userId];
-
-                if (status) {
-                    query += ' AND at.status = ?';
-                    params.push(status);
-                }
+                params = [userId, userId];
             } else {
                 return res.status(403).json({
                     success: false,
@@ -914,11 +910,35 @@ app.get('/api/attendance-tasks', requireLogin, async (req, res) => {
             query += ' ORDER BY at.createTime DESC';
 
             const [rows] = await connection.execute(query, params);
+            const now = new Date();
+
+            const processedRows = rows.map(row => {
+                const endTime = row.endTime ? new Date(row.endTime) : null;
+                const isExpired = endTime ? endTime < now : false;
+
+                if (userRole === 'student') {
+                    const hasCheckedIn = Boolean(row.hasCheckedIn);
+                    let statusValue = 'active';
+
+                    if (hasCheckedIn) {
+                        statusValue = 'completed';
+                    } else if (isExpired) {
+                        statusValue = 'inactive';
+                    }
+
+                    row.status = statusValue;
+                    delete row.hasCheckedIn;
+                } else {
+                    row.status = isExpired ? 'inactive' : 'active';
+                }
+
+                return row;
+            });
 
             res.json({
                 success: true,
                 message: '获取签到任务列表成功',
-                data: rows
+                data: processedRows
             });
 
         } finally {
@@ -1212,18 +1232,41 @@ io.on('connection', (socket) => {
             const connection = await pool.getConnection();
             try {
                 const [rows] = await connection.execute(
-                    `SELECT at.*, c.className, u.userName as teacherName
+                    `SELECT at.*, c.className, u.userName as teacherName,
+                            CASE WHEN EXISTS (
+                                SELECT 1
+                                FROM attendance_record ar
+                                WHERE ar.taskId = at.id AND ar.userId = ? AND ar.status = 1
+                            ) THEN 1 ELSE 0 END AS hasCheckedIn
                      FROM attendance_task at
                      LEFT JOIN class c ON at.classId = c.id
                      LEFT JOIN user u ON at.teacherId = u.id
                      WHERE at.classId = ?
                      ORDER BY at.createTime DESC`,
-                    [socket.classId]
+                    [socket.userId, socket.classId]
                 );
+
+                const now = new Date();
+                const processedRows = rows.map(row => {
+                    const endTime = row.endTime ? new Date(row.endTime) : null;
+                    const isExpired = endTime ? endTime < now : false;
+                    const hasCheckedIn = Boolean(row.hasCheckedIn);
+
+                    if (hasCheckedIn) {
+                        row.status = 'completed';
+                    } else if (isExpired) {
+                        row.status = 'inactive';
+                    } else {
+                        row.status = 'active';
+                    }
+
+                    delete row.hasCheckedIn;
+                    return row;
+                });
 
                 socket.emit('tasks-response', {
                     success: true,
-                    data: rows
+                    data: processedRows
                 });
             } finally {
                 connection.release();
