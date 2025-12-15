@@ -1,9 +1,9 @@
 {
-    "name" : "test",
-    "appid" : "__UNI__A2A7512",
+    "name" : "faceRecognition",
+    "appid" : "__UNI__895BAF1",
     "description" : "",
-    "versionName" : "0.0.1",
-    "versionCode" : 1,
+    "versionName" : "0.0.3",
+    "versionCode" : 3,
     "transformPx" : false,
     /* 5+App特有相关 */
     "app-plus" : {

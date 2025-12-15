@@ -58,15 +58,27 @@ export function logOut(url)		//登出请求
 
 export function isStudent()	//是否是学生
 {
+	// 优先从 config 中读取 userRole（登录时保存到这里）
+	try {
+		const appConfig = uni.getStorageSync('app_config');
+		if(appConfig && appConfig.userRole && appConfig.userRole != 'student')
+		{
+			return false; // 是老师
+		}
+	}
+	catch(e) {
+		console.log('读取 config 失败:', e);
+	}
+	
+	// 兼容旧版本的 userInfo（如果没有 config）
 	const userInfo = uni.getStorageSync('userInfo');
-	if(userInfo && userInfo.userRole!='student')
+	if(userInfo && userInfo.userRole && userInfo.userRole != 'student')
 	{
-		return false;
+		return false; // 是老师
 	}
-	else
-	{
-		return true;
-	}
+	
+	// 默认返回 true（是学生或未登录）
+	return true;
 }
 
 export function tokenSave(token)
@@ -89,7 +101,7 @@ export function getTasks(url)
 {
 	uni.request({
 		url:url,
-		method:'POST',
+		method:'GET',
 		timeout:5000,
 		header:{'Authorization':tokenGet()},
 		success: (res) => {

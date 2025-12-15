@@ -44,7 +44,7 @@
 	const password_value=ref();
 	// const classid_value=ref();
 	const password_again_value=ref();
-	const register_url=computed(()=> 'http://'+proxy.$config.get('url')+'/api/register');
+	const register_url=computed(()=> 'http://'+proxy.$config.get('ip')+'/api/register');
 	const classInfo=ref([{'id':1,'className':'软件231','classCode':'CS2023-1'}]);
 	const index=ref(0);
 	const classArray = computed(() => classInfo.value.map(item => item.className));
@@ -87,11 +87,23 @@
 			title:'正在注册',
 			mask:true
 		})
+		// 获取选中的班级ID
+		const selectedClassId = classInfo.value[index.value]?.id;
+		if(!selectedClassId) {
+			uni.showModal({
+				title: '注册失败',
+				content: '请选择班级',
+				showCancel: false
+			});
+			uni.hideLoading();
+			return;
+		}
+		
 		uni.request({
 		    url: register_url.value, 
 		    method: 'POST',
 			timeout:5000,
-			data:{"userAccount":account_value.value,"userPassword":password_value.value,"userName":username_value.value,"classId":index.value+1},
+			data:{"userAccount":account_value.value,"userPassword":password_value.value,"userName":username_value.value,"classId":selectedClassId},
 		    success: (res) => {
 				if(res.data.success)
 				{
@@ -140,7 +152,7 @@
 	function getClass() //获取班级列表
 	{
 		uni.request({
-		    url: 'http://'+proxy.$config.get('url')+'/api/classes', // 
+		    url: 'http://'+proxy.$config.get('ip')+'/api/classes', // 
 		    method: 'GET',
 		    success: (res) => {
 				if(res.data.success)
