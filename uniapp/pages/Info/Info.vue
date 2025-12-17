@@ -88,6 +88,11 @@
 			sourceType: ['camera','album'], 
 			success: function (res) {
 				const path=res.tempFilePaths[0];
+				// 显示加载动画
+				uni.showLoading({
+					title: '正在注册人脸...',
+					mask: true
+				});
 				uni.uploadFile({
 							url: 'http://'+proxy.$config.get('ip')+'/api/face-register',
 							filePath: path,
@@ -98,6 +103,9 @@
 							success: (res) => {
 								if(res.statusCode==200)
 								{
+									// 更新本地配置中的人脸注册状态
+									proxy.$config.set('face', true);
+									uni.hideLoading();
 									uni.showToast({
 									    title: '注册人脸成功',
 									    icon: 'success'
@@ -105,6 +113,7 @@
 								}
 								else
 								{
+									uni.hideLoading();
 									res.data=JSON.parse(res.data)
 									uni.showModal({
 										title: '注册人脸失败',
@@ -115,6 +124,7 @@
 								
 							},
 							fail:(res)=>{
+								uni.hideLoading();
 								uni.showModal({
 									title: '注册人脸失败',
 									content: '请检查网络配置',
@@ -122,6 +132,8 @@
 								});
 							},
 							complete:()=>{
+								// 确保在完成时隐藏加载动画
+								uni.hideLoading();
 							}
 				});
 			}
