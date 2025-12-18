@@ -1,5 +1,10 @@
 <template>
-	<scroll-view class="layout" scroll-y="true" :style="'height:'+screenHeight+'px!important'">
+	<scroll-view class="layout" scroll-y="true" :style="'height:'+screenHeight+'px!important;padding-top:'+(showFaceTip ? '80rpx' : '0')+';'">
+		<!-- 人脸注册提示条 -->
+		<view class="face-tip" v-if="showFaceTip" @click="goToRegister">
+			<text class="tip-text">⚠️ 您还未注册人脸，请先前往个人中心注册</text>
+			<text class="tip-btn">去注册</text>
+		</view>
 		<button class='loadbutton' size="default" @click="uploadimg">
 			<text>拍照签到</text>
 			<view class="dot" v-if="task_flag"></view>
@@ -12,15 +17,20 @@
 		<!-- 签到任务列表 -->
 		<view class="task-list" v-if="tasks.length > 0">
 			<view class="task-title">签到任务</view>
-			<view class="task-item" v-for="(task, index) in tasks" :key="task.id" @click="selectTask(task)">
-				<view class="task-name">{{ task.taskName }}</view>
-				<view class="task-info">
-					<text class="task-time">{{ formatTime(task.startTime) }} - {{ formatTime(task.endTime) }}</text>
-					<text class="task-status" :class="{'status-active': task.status === 'active', 'status-completed': task.status === 'completed'}">
-						{{ task.status === 'active' ? '进行中' : task.status === 'completed' ? '已完成' : '已结束' }}
-					</text>
+			<view class="task-item" v-for="(task, index) in tasks" :key="task.id">
+				<view class="task-content" @click="selectTask(task)">
+					<view class="task-name">{{ task.taskName }}</view>
+					<view class="task-info">
+						<text class="task-time">{{ formatTime(task.startTime) }} - {{ formatTime(task.endTime) }}</text>
+						<text class="task-status" :class="{'status-active': task.status === 'active', 'status-completed': task.status === 'completed'}">
+							{{ task.status === 'active' ? '进行中' : task.status === 'completed' ? '已完成' : '已结束' }}
+						</text>
+					</view>
+					<view class="task-teacher" v-if="task.teacherName">发布人：{{ task.teacherName }}</view>
 				</view>
-				<view class="task-teacher" v-if="task.teacherName">发布人：{{ task.teacherName }}</view>
+				<view class="task-actions" v-if="!studentFlag">
+					<button class="stats-btn" @click.stop="viewStats(task)">查看统计</button>
+				</view>
 			</view>
 		</view>
 	</scroll-view>
@@ -40,18 +50,56 @@
 	const task_flag=ref(false);
 	const tasks=ref([]); // 存储任务列表
 	const selectedTask=ref(null); // 当前选中的任务
+	const hasShownFaceTip=ref(false); // 是否已显示过人脸注册提示
+	const showFaceTip=ref(false); // 是否显示人脸注册提示条
 	
 	
 	onLoad(()=>{
 		screenHeight.value=uni.getSystemInfoSync().windowHeight;
 		studentFlag.value=isStudent();
 		getTasks(); // 页面加载时立即获取一次任务列表
+		updateFaceTipStatus(); // 检查人脸注册状态
 	})
 	onShow(()=>{
 		// 页面显示时重新检查用户角色（可能在另一个页面登录了）
 		studentFlag.value=isStudent();
 		getTasks(); // 页面显示时也获取一次任务列表
+		// 只有学生用户才需要检查人脸注册状态
+		updateFaceTipStatus();
 	})
+	
+	function updateFaceTipStatus() {
+		if(studentFlag.value && proxy.$config.get('isLogin')) {
+			// 立即检查人脸注册状态
+			const faceRegistered = proxy.$config.get('face');
+			console.log('检查人脸注册状态:', {
+				isStudent: studentFlag.value,
+				isLogin: proxy.$config.get('isLogin'),
+				faceRegistered: faceRegistered
+			});
+			// 判断是否已注册：faceRegistered 为 true、1 或 'true' 都视为已注册
+			const isFaceRegistered = faceRegistered === true || faceRegistered === 1 || faceRegistered === 'true';
+			showFaceTip.value = !isFaceRegistered; // 未注册时显示提示条
+			if(isFaceRegistered) {
+				// 如果已注册，重置提示标记
+				hasShownFaceTip.value = false;
+			} else {
+				// 如果未注册且已登录，延迟2秒后显示弹窗提示，避免干扰用户
+				setTimeout(() => {
+					checkFaceRegistered(false, true);
+				}, 2000);
+			}
+		} else {
+			showFaceTip.value = false;
+		}
+	}
+	
+	function goToRegister() {
+		// 跳转到个人中心页面
+		uni.switchTab({
+			url: '/pages/Info/Info'
+		});
+	}
 	setInterval(getTasks, 5000); // 每5秒轮询一次
 	
 	
@@ -59,6 +107,11 @@
 	
 	function uploadimg() //拍照签到event
 	{
+		// 检查是否已注册人脸
+		if(!checkFaceRegistered(true)) {
+			return; // 如果未注册，checkFaceRegistered 已经显示了提示，直接返回
+		}
+		
 		// 如果有选中的任务，使用任务ID，否则不传taskId
 		const taskId = selectedTask.value ? selectedTask.value.id : null;
 		
@@ -76,6 +129,12 @@
 				if(taskId) {
 					formData.taskId = taskId;
 				}
+				
+				// 显示加载动画
+				uni.showLoading({
+					title: '正在识别中...',
+					mask: true
+				});
 				
 				uni.uploadFile({
 							url: 'http://'+proxy.$config.get('ip')+'/api/face-recognition', //仅为示例，非真实的接口地址
@@ -96,6 +155,7 @@
 								
 								if(responseData.success)
 								{
+									uni.hideLoading();
 									uni.showToast({
 									    title: '签到成功',
 									    icon: 'success'
@@ -106,6 +166,7 @@
 								}
 								else
 								{
+									uni.hideLoading();
 									uni.showModal({
 										title: '签到失败',
 										content: responseData.message || '签到失败，请重试',
@@ -114,12 +175,15 @@
 								}
 							},
 							fail:(res)=>{
+								uni.hideLoading();
 								uni.showToast({
 									title:'签到失败',
 									icon:'error'
 								})
 							},
 							complete:()=>{
+								// 确保在完成时隐藏加载动画
+								uni.hideLoading();
 								console.log('上传完成');
 							}
 				});
@@ -274,6 +338,73 @@
 		const minutes = date.getMinutes().toString().padStart(2, '0');
 		return `${month}-${day} ${hours}:${minutes}`;
 	}
+	
+	function viewStats(task) {
+		// 跳转到统计页面
+		uni.navigateTo({
+			url: `/pages/stats/stats?taskId=${task.id}`
+		});
+	}
+	
+	function checkFaceRegistered(showModal = false, isDelayedTip = false) {
+		// 只有学生用户才需要检查人脸注册状态
+		if(!studentFlag.value) {
+			console.log('非学生用户，跳过人脸检查');
+			return true; // 非学生用户不需要检查
+		}
+		
+		// 检查用户是否已登录
+		if(!proxy.$config.get('isLogin')) {
+			console.log('用户未登录，跳过人脸检查');
+			return true; // 未登录时不检查人脸注册状态
+		}
+		
+		// 检查是否已注册人脸
+		const faceRegistered = proxy.$config.get('face');
+		console.log('人脸注册检查:', {
+			faceRegistered: faceRegistered,
+			isDelayedTip: isDelayedTip,
+			hasShownFaceTip: hasShownFaceTip.value
+		});
+		
+		// 判断是否已注册：faceRegistered 为 true、1 或 'true' 都视为已注册
+		const isFaceRegistered = faceRegistered === true || faceRegistered === 1 || faceRegistered === 'true';
+		
+		if(!isFaceRegistered) {
+			// 如果是延迟提示且已经提示过，则不再提示
+			if(isDelayedTip && hasShownFaceTip.value) {
+				console.log('已提示过，不再重复提示');
+				return false;
+			}
+			
+			// 未注册人脸，显示提示
+			if(isDelayedTip) {
+				hasShownFaceTip.value = true;
+			}
+			
+			console.log('显示人脸注册提示');
+			uni.showModal({
+				title: '提示',
+				content: '您还未注册人脸，无法进行签到。请先前往个人中心注册人脸。',
+				showCancel: true,
+				confirmText: '去注册',
+				cancelText: '稍后',
+				success: (res) => {
+					if(res.confirm) {
+						// 跳转到个人中心页面
+						uni.switchTab({
+							url: '/pages/Info/Info'
+						});
+					}
+				}
+			});
+			return false; // 返回 false 表示未注册
+		}
+		// 如果已注册，重置提示标记和提示条
+		hasShownFaceTip.value = false;
+		showFaceTip.value = false;
+		return true; // 返回 true 表示已注册
+	}
 </script>
 
 <style lang='scss' scoped>
@@ -326,6 +457,30 @@
 			padding: 30rpx;
 			margin-bottom: 20rpx;
 			box-shadow: 0 2rpx 10rpx rgba(0, 0, 0, 0.1);
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+		}
+		
+		.task-content{
+			flex: 1;
+		}
+		
+		.task-actions{
+			margin-left: 20rpx;
+		}
+		
+		.stats-btn{
+			width: 140rpx;
+			height: 60rpx;
+			line-height: 60rpx;
+			padding: 0;
+			margin: 0;
+			font-size: 24rpx;
+			background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+			color: #fff;
+			border-radius: 10rpx;
+			border: none;
 		}
 		
 		.task-name{
@@ -369,6 +524,34 @@
 			font-size: 24rpx;
 			color: #999;
 			margin-top: 10rpx;
+		}
+		
+		.face-tip{
+			position: fixed;
+			top: 0;
+			left: 0;
+			right: 0;
+			background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);
+			color: #fff;
+			padding: 20rpx 30rpx;
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			z-index: 999;
+			box-shadow: 0 2rpx 10rpx rgba(0, 0, 0, 0.2);
+			height: 80rpx;
+			box-sizing: border-box;
+			.tip-text{
+				font-size: 28rpx;
+				flex: 1;
+			}
+			.tip-btn{
+				background-color: rgba(255, 255, 255, 0.3);
+				padding: 10rpx 20rpx;
+				border-radius: 20rpx;
+				font-size: 24rpx;
+				margin-left: 20rpx;
+			}
 		}
 	}
 </style>

@@ -1004,14 +1004,16 @@ app.get('/api/attendance-stats', requireLogin, async (req, res) => {
                 [taskId]
             );
 
-            // 获取签到详情
+            // 获取所有学生信息（包括已签到和未签到的）
             const [detailRows] = await connection.execute(
-                `SELECT u.userName, u.userAccount, ar.checkTime, ar.status
-                 FROM attendance_record ar
-                 LEFT JOIN user u ON ar.userId = u.id
-                 WHERE ar.taskId = ?
-                 ORDER BY ar.checkTime DESC`,
-                [taskId]
+                `SELECT u.id as userId, u.userName, u.userAccount, 
+                        ar.checkTime, 
+                        CASE WHEN ar.id IS NOT NULL AND ar.status = 1 THEN 1 ELSE 0 END as status
+                 FROM user u
+                 LEFT JOIN attendance_record ar ON u.id = ar.userId AND ar.taskId = ?
+                 WHERE u.classId = ? AND u.userRole = 'student'
+                 ORDER BY status DESC, ar.checkTime DESC, u.userAccount ASC`,
+                [taskId, task.classId]
             );
 
             res.json({

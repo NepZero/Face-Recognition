@@ -26,6 +26,13 @@
 			{
 				"navigationBarTitleText" : "注册"
 			}
+		},
+		{
+			"path" : "pages/stats/stats",
+			"style" : 
+			{
+				"navigationBarTitleText" : "签到统计"
+			}
 		}
 	],
 	"globalStyle": {
