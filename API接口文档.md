@@ -14,8 +14,8 @@
 
 ## 系统角色
 
-- **学生 (student)**: 注册时必须选择班级，可以查看自己班级的签到任务并进行签到
-- **老师 (teacher)**: 预置账号，可以发布签到任务、查看签到统计
+- **学生 (student)**: 注册时必须选择班级，可以选课，查看自己已选课程的签到任务并进行签到
+- **老师 (teacher)**: 预置账号，可以创建课程、管理课程班级关联、发布签到任务、查看签到统计
 
 ## 鉴权约定
 
@@ -28,7 +28,10 @@
 
 - `class`: 班级表
 - `user`: 用户表（包含角色和班级关联）
-- `attendance_task`: 签到任务表
+- `course`: 课程表
+- `course_class`: 课程-班级关联表
+- `student_course`: 学生-课程关联表（选课表）
+- `attendance_task`: 签到任务表（关联课程）
 - `attendance_record`: 签到记录表
 
 ## 1. 用户注册接口
@@ -529,7 +532,7 @@ Authorization: Bearer <accessToken>
      - 若验证失败，返回 403 "安全验证失败：只能识别本人的人脸"
      - 若当前用户是老师（`userRole === 'teacher'`），允许识别任何人（跳过此验证）
    - 若提供了 `taskId`，校验签到任务：
-     - 查询任务：`SELECT * FROM attendance_task WHERE id = ? AND classId = ? AND status='active' AND startTime<=NOW() AND endTime>=NOW()`
+     - 查询任务：`SELECT * FROM attendance_task WHERE id = ? AND courseId IN (SELECT courseId FROM student_course WHERE studentId = ?) AND status='active' AND startTime<=NOW() AND endTime>=NOW()`
      - 若任务有效，自动写入签到记录：`INSERT INTO attendance_record (userId, taskId, checkTime, status) VALUES (?, ?, NOW(), 1)`
      - 若任务无效，`attendanceRecorded=false`（不影响识别成功响应）
 
@@ -541,7 +544,7 @@ Authorization: Bearer <accessToken>
 - **身份验证**：学生只能识别本人，老师可以识别任何人
 - 上传字段名必须为 `imagefile`（与后端 `upload.single('imagefile')` 对应）
 - 算法使用 Python 子进程调用，必要时可通过环境变量 `PYTHON_EXE` 指定解释器路径
-- 若提供 `taskId`，后端将校验任务属于该用户班级、状态为 active 且在有效时间窗内
+- 若提供 `taskId`，后端将校验任务属于该用户已选的课程、状态为 active 且在有效时间窗内
 - 校验通过自动写入 `attendance_record`，失败仅影响 `attendanceRecorded` 字段，不影响识别结果返回
 - 识别失败（`recognized=false`）不是错误，正常返回 200 状态码
 - **前端不需要传 userId**，后端从 JWT 解析当前用户
@@ -621,20 +624,228 @@ uni.uploadFile({
 | data[].className | string | 班级名称 |
 | data[].classCode | string | 班级编码 |
 
-## 8. 老师发布签到任务接口（含实时推送）
+## 8. 课程管理接口
+
+### 8.1 创建课程接口
+
+**接口地址：** `POST /api/courses`
+
+**权限要求：** 需要老师登录（请求头携带 `Authorization: Bearer <accessToken>`）
+
+**请求参数：**
+```json
+{
+    "courseName": "软件工程",
+    "courseCode": "SE001",
+    "description": "软件工程基础课程"
+}
+```
+
+**字段类型：**
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| courseName | string | 是 | 课程名称，最长100字符 |
+| courseCode | string | 是 | 课程代码，最长50字符，必须唯一 |
+| description | string | 否 | 课程描述 |
+
+**业务规则：**
+- 只有老师可以创建课程
+- 课程代码必须唯一
+- 课程创建者自动成为该课程的授课老师
+
+**响应示例：**
+```json
+{
+    "success": true,
+    "message": "课程创建成功",
+    "data": {
+        "id": 1,
+        "courseName": "软件工程",
+        "courseCode": "SE001",
+        "teacherId": 6,
+        "description": "软件工程基础课程",
+        "createTime": "2025-01-01 10:00:00"
+    }
+}
+```
+
+### 8.2 获取课程列表接口
+
+**接口地址：** `GET /api/courses`
+
+**权限要求：** 需要登录
+
+**请求参数：**
+- `teacherId`: 可选，老师ID筛选（仅老师可用）
+
+**功能说明：**
+- 老师：查看自己创建的课程
+- 学生：查看所有课程，包含选课状态和班级关联状态
+
+**响应示例（学生）：**
+```json
+{
+    "success": true,
+    "message": "获取课程列表成功",
+    "data": [
+        {
+            "id": 1,
+            "courseName": "软件工程",
+            "courseCode": "SE001",
+            "teacherId": 6,
+            "teacherName": "张老师",
+            "description": "软件工程基础课程",
+            "isSelected": 1,
+            "isClassRelated": 0,
+            "createTime": "2025-01-01 10:00:00"
+        }
+    ]
+}
+```
+
+**响应字段说明：**
+- `isSelected`: 学生是否已选该课程（1=已选，0=未选）
+- `isClassRelated`: 学生的班级是否关联该课程（1=关联，0=未关联）
+
+### 8.3 获取课程详情接口
+
+**接口地址：** `GET /api/courses/:id`
+
+**权限要求：** 需要登录
+
+**功能说明：**
+- 老师：只能查看自己创建的课程详情（包含关联的班级列表）
+- 学生：可以查看所有课程详情
+
+**响应示例（老师）：**
+```json
+{
+    "success": true,
+    "message": "获取课程详情成功",
+    "data": {
+        "id": 1,
+        "courseName": "软件工程",
+        "courseCode": "SE001",
+        "teacherId": 6,
+        "teacherName": "张老师",
+        "description": "软件工程基础课程",
+        "classes": [
+            {
+                "id": 1,
+                "className": "计算机科学与技术2023级1班",
+                "classCode": "CS2023-1"
+            }
+        ],
+        "createTime": "2025-01-01 10:00:00"
+    }
+}
+```
+
+### 8.4 更新课程接口
+
+**接口地址：** `PUT /api/courses/:id`
+
+**权限要求：** 需要老师登录，且必须是课程创建者
+
+**请求参数：**
+```json
+{
+    "courseName": "软件工程（更新）",
+    "description": "更新后的课程描述"
+}
+```
+
+**注意：** 课程代码不可修改
+
+### 8.5 删除课程接口
+
+**接口地址：** `DELETE /api/courses/:id`
+
+**权限要求：** 需要老师登录，且必须是课程创建者
+
+**业务规则：**
+- 删除课程会级联删除相关的签到任务、选课记录、课程班级关联
+
+### 8.6 管理课程班级关联接口
+
+**接口地址：** `POST /api/courses/:id/classes`
+
+**权限要求：** 需要老师登录，且必须是课程创建者
+
+**请求参数：**
+```json
+{
+    "classIds": [1, 2, 3]
+}
+```
+
+**功能说明：** 为课程关联多个班级（会替换原有的关联关系）
+
+**响应示例：**
+```json
+{
+    "success": true,
+    "message": "班级关联成功",
+    "data": {
+        "courseId": 1,
+        "classIds": [1, 2, 3]
+    }
+}
+```
+
+### 8.7 删除课程班级关联接口
+
+**接口地址：** `DELETE /api/courses/:id/classes/:classId`
+
+**权限要求：** 需要老师登录，且必须是课程创建者
+
+**功能说明：** 移除课程与指定班级的关联
+
+### 8.8 学生选课接口
+
+**接口地址：** `POST /api/courses/:id/select`
+
+**权限要求：** 需要学生登录
+
+**功能说明：** 学生选择课程
+
+**响应示例：**
+```json
+{
+    "success": true,
+    "message": "选课成功"
+}
+```
+
+**错误情况：**
+- 课程不存在：404
+- 已选过该课程：400 "您已经选过该课程了"
+- 只有学生可以选课：403
+
+### 8.9 学生退课接口
+
+**接口地址：** `DELETE /api/courses/:id/select`
+
+**权限要求：** 需要学生登录
+
+**功能说明：** 学生退出已选的课程
+
+## 9. 老师发布签到任务接口
 
 **接口地址：** `POST /api/attendance-task`
 
 **权限要求：** 需要老师登录（请求头携带 `Authorization: Bearer <accessToken>`）
 
-**变更摘要（2025-11-03）：**
-- 请求体仅保留一个参数：`duration`（单位：分钟）。
-- `classId` 从 JWT 解析的用户信息读取（无需前端传递）。
+**变更摘要（最新）：**
+- 请求体包含 `courseId` 和 `duration`（单位：分钟）。
+- 签到任务现在关联课程，而不是直接关联班级。
 - `startTime`/`endTime` 由后端根据服务器当前时间计算并返回。
 
 **请求参数：**
 ```json
 {
+    "courseId": 1,
     "duration": 30
 }
 ```
@@ -643,13 +854,13 @@ uni.uploadFile({
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
+| courseId | number | 是 | 课程ID，必须是该老师创建的课程 |
 | duration | number | 是 | 持续时长（分钟），必须 > 0，最小 1 分钟 |
 
 **业务规则：**
 - 只有老师可以发布签到任务
-- 班级从 JWT 解析的用户信息获取，老师只能为自己所在的班级发布
+- 老师只能为自己创建的课程发布签到任务
 - 开始时间 = 服务器当前时间；结束时间 = 开始时间 + `duration`
-- 任务发布成功后，系统会通过 Socket.IO 推送给对应班级的所有在线学生
 
 **响应示例：**
 
@@ -661,18 +872,14 @@ uni.uploadFile({
     "data": {
         "taskId": 1,
         "taskName": "签到任务-2025-11-03 09:00:00",
-        "classId": 1,
+        "courseId": 1,
+        "courseName": "软件工程",
+        "courseCode": "SE001",
         "startTime": "2025-11-03 09:00:00",
         "endTime": "2025-11-03 09:30:00"
     }
 }
 ```
-
-**Socket.IO 实时推送说明**：
-
-当任务发布成功后，系统会自动通过 Socket.IO 向目标班级的房间推送新任务。所有在该班级房间的在线学生都会收到 `new-task` 事件（事件数据结构见"11. Socket.IO 实时通信接口"）。
-
-学生前端只需监听 `new-task` 事件，即可实时收到新任务，无需轮询 API。
 
 **响应字段类型：**
 
@@ -682,7 +889,9 @@ uni.uploadFile({
 | message | string | 提示信息 |
 | data.taskId | number | 新任务 ID |
 | data.taskName | string | 任务名（服务端自动生成） |
-| data.classId | number | 班级 ID |
+| data.courseId | number | 课程 ID |
+| data.courseName | string | 课程名称 |
+| data.courseCode | string | 课程代码 |
 | data.startTime | string(datetime) | 开始时间 |
 | data.endTime | string(datetime) | 结束时间 |
 
@@ -697,31 +906,28 @@ uni.uploadFile({
 { "success": false, "message": "请提供有效的持续时长（duration，单位：分钟）" }
 ```
 
-## 9. 获取签到任务列表接口（支持 Socket.IO）
+## 10. 获取签到任务列表接口
 
 **接口地址：** `GET /api/attendance-tasks`
 
 **权限要求：** 需要登录
 
 **请求参数：**
-- `classId`: 可选，班级ID筛选（仅老师可用）
+- `courseId`: 可选，课程ID筛选（仅老师可用）
 
 **字段类型：**
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| classId | number | 否 | 仅老师可用的筛选条件 |
+| courseId | number | 否 | 仅老师可用的筛选条件 |
 
 **功能说明：**
 - 老师：查看自己发布的任务，`status` 字段仅区分 `active`（未过期）与 `inactive`（已过期）
-- 学生：查看自己班级的任务，`status` 可能为 `active`（未过期未签到）、`inactive`（已过期未签到）、`completed`（已签到）
+- 学生：查看自己已选课程的签到任务，`status` 可能为 `active`（未过期未签到）、`inactive`（已过期未签到）、`completed`（已签到）
 
-**Socket.IO 方式（推荐）**：
-学生也可以通过 Socket.IO 请求任务列表，发送 `get-tasks` 事件，监听 `tasks-response` 响应（详见"11. Socket.IO 实时通信接口"）。
-
-**推荐使用方式**：
-- **实时接收新任务**：使用 Socket.IO 监听 `new-task` 事件（自动推送）
-- **查询任务列表**：使用 REST API 或 Socket.IO 的 `get-tasks` 事件（按需查询）
+**业务规则：**
+- 学生只能看到自己已选课程的签到任务（基于 student_course 表）
+- 老师可以通过 courseId 参数筛选特定课程的任务
 
 **响应示例：**
 ```json
@@ -733,11 +939,12 @@ uni.uploadFile({
             "id": 1,
             "taskName": "上午签到",
             "teacherId": 6,
-            "classId": 1,
+            "courseId": 1,
+            "courseName": "软件工程",
+            "courseCode": "SE001",
             "startTime": "2024-01-01 08:00:00",
             "endTime": "2024-01-01 09:00:00",
             "status": "active",
-            "className": "计算机科学与技术2021级1班",
             "teacherName": "张老师"
         }
     ]
@@ -753,14 +960,15 @@ uni.uploadFile({
 | data[].id | number | 任务 ID |
 | data[].taskName | string | 任务名 |
 | data[].teacherId | number | 发布老师 ID |
-| data[].classId | number | 班级 ID |
+| data[].courseId | number | 课程 ID |
+| data[].courseName | string | 课程名称 |
+| data[].courseCode | string | 课程代码 |
 | data[].startTime | string(datetime) | 开始时间 |
 | data[].endTime | string(datetime) | 结束时间 |
 | data[].status | string | 任务状态（`active` / `inactive` / `completed`） |
-| data[].className | string | 班级名 |
 | data[].teacherName | string | 老师名 |
 
-## 10. 获取签到统计接口
+## 11. 获取签到统计接口
 
 **接口地址：** `GET /api/attendance-stats`
 
@@ -775,7 +983,7 @@ uni.uploadFile({
 | --- | --- | --- | --- |
 | taskId | number | 是 | 目标签到任务 ID |
 
-**功能说明：** 获取指定签到任务的统计信息，包括签到率、学生详情等
+**功能说明：** 获取指定签到任务的统计信息，包括签到率、学生详情等。统计基于课程关联的所有学生（包括课程关联的班级学生和明确选课的学生）。
 
 **响应示例：**
 ```json
@@ -786,7 +994,8 @@ uni.uploadFile({
         "task": {
             "id": 1,
             "taskName": "上午签到",
-            "classId": 1,
+            "courseId": 1,
+            "courseName": "软件工程",
             "startTime": "2024-01-01 08:00:00",
             "endTime": "2024-01-01 09:00:00",
             "status": "active"
@@ -798,6 +1007,8 @@ uni.uploadFile({
             {
                 "userName": "张三",
                 "userAccount": "student001",
+                "classId": 1,
+                "className": "计算机科学与技术2023级1班",
                 "checkTime": "2024-01-01 08:15:30",
                 "status": 1
             }
@@ -814,15 +1025,18 @@ uni.uploadFile({
 | message | string | 提示信息 |
 | data.task.id | number | 任务 ID |
 | data.task.taskName | string | 任务名 |
-| data.task.classId | number | 班级 ID |
+| data.task.courseId | number | 课程 ID |
+| data.task.courseName | string | 课程名称 |
 | data.task.startTime | string(datetime) | 开始时间 |
 | data.task.endTime | string(datetime) | 结束时间 |
 | data.task.status | string | 任务状态 |
-| data.totalStudents | number | 班级总人数 |
+| data.totalStudents | number | 课程总学生数（包括关联班级学生和选课学生） |
 | data.checkedStudents | number | 已签到人数 |
 | data.attendanceRate | string | 百分比字符串 |
 | data.details[].userName | string | 学生姓名 |
 | data.details[].userAccount | string | 学号/账号 |
+| data.details[].classId | number | 学生班级 ID |
+| data.details[].className | string | 学生班级名称 |
 | data.details[].checkTime | string(datetime) | 签到时间 |
 | data.details[].status | number | 签到状态（1成功） |
 
@@ -842,7 +1056,9 @@ uni.uploadFile({
 - teacher004 (赵老师) - 密码: 123456
 - teacher005 (刘老师) - 密码: 123456
 
-## 11. Socket.IO 实时通信接口
+## 12. Socket.IO 实时通信接口（已弃用）
+
+**注意：** 当前版本已不再使用 Socket.IO 实时推送，所有功能通过 REST API 实现。
 
 **连接地址：** `ws://your-server:3000` 或 `http://your-server:3000`
 
