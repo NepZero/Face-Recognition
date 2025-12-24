@@ -577,12 +577,29 @@ app.post('/api/face-recognition', requireLogin, upload.single('imagefile'), asyn
 			const recognitionResult = await runPythonRecognition(absImagePath);
 
             if (recognitionResult && recognitionResult.recognized) {
-                // 查找用户信息
+                // 识别成功，说明识别到了已知人脸
+                // 对于学生：以当前登录用户为准，避免因多用户使用同一张照片导致识别错误
+                // 对于老师：可以使用识别出的用户ID（用于管理场景）
                 const connection = await pool.getConnection();
                 try {
+                    // 确定要使用的用户ID
+                    let targetUserId;
+                    if (currentUserRole === 'student') {
+                        // 学生：始终使用当前登录的用户ID
+                        targetUserId = currentUserId;
+                        // 如果识别出的用户ID与当前用户不一致，记录日志但不阻止
+                        if (Number(recognitionResult.userId) !== Number(currentUserId)) {
+                            console.log(`[人脸识别] 识别出用户ID ${recognitionResult.userId}，但以当前登录用户 ${currentUserId} 为准`);
+                        }
+                    } else {
+                        // 老师：使用识别出的用户ID（可以识别任何人）
+                        targetUserId = recognitionResult.userId;
+                    }
+
+                    // 查找用户信息
                     const [rows] = await connection.execute(
                         'SELECT * FROM user WHERE id = ? ',
-                        [recognitionResult.userId]
+                        [targetUserId]
                     );
 
                     if (rows.length === 0) {
@@ -593,30 +610,20 @@ app.post('/api/face-recognition', requireLogin, upload.single('imagefile'), asyn
                     }
 
                     const user = rows[0];
-                    
-                    // 安全验证：学生只能识别自己，老师可以识别任何人
-                    if (currentUserRole === 'student') {
-                        // 学生身份验证：识别出的用户必须是当前登录的学生本人
-                        if (Number(recognitionResult.userId) !== Number(currentUserId)) {
-                            return res.status(403).json({
-                                success: false,
-                                message: '安全验证失败：只能识别本人的人脸',
-                                data: {
-                                    recognized: true,
-                                    recognizedUserId: recognitionResult.userId,
-                                    currentUserId: currentUserId
-                                }
-                            });
-                        }
-                    }
-                    // 老师角色不需要此验证，可以识别任何人的脸
 
                     // 验证签到任务（如果提供了taskId）
                     let validTask = true;
                     if (taskId) {
+                        // 验证任务是否存在、是否有效，以及学生是否明确选择了该课程
                         const [taskRows] = await connection.execute(
-                            'SELECT * FROM attendance_task WHERE id = ? AND classId = ? AND status = "active" AND startTime <= NOW() AND endTime >= NOW()',
-                            [taskId, user.classId]
+                            `SELECT at.* FROM attendance_task at
+                             WHERE at.id = ? AND at.status = 'active' 
+                             AND at.startTime <= NOW() AND at.endTime >= NOW()
+                             AND EXISTS (
+                                 SELECT 1 FROM student_course sc 
+                                 WHERE sc.courseId = at.courseId AND sc.studentId = ?
+                             )`,
+                            [taskId, user.id]
                         );
 
                         if (taskRows.length === 0) {
@@ -691,12 +698,742 @@ app.post('/api/logout', (req, res) => {
     res.json({ success: true, message: '登出成功' });
 });
 
-// 老师发布签到任务接口（仅接收持续时长，班级从 session 获取，时间后端计算）
+// ==================== 课程管理接口 ====================
+
+// 1. 创建课程接口（老师）
+app.post('/api/courses', requireLogin, async (req, res) => {
+    try {
+        const teacherId = req.user.id;
+        const userRole = req.user.userRole;
+
+        // 验证用户是否为老师
+        if (userRole !== 'teacher') {
+            return res.status(403).json({
+                success: false,
+                message: '只有老师可以创建课程'
+            });
+        }
+
+        const { courseName, courseCode, description } = req.body;
+
+        // 验证必填字段
+        if (!courseName || !courseCode) {
+            return res.status(400).json({
+                success: false,
+                message: '课程名称和课程代码不能为空'
+            });
+        }
+
+        // 验证格式
+        if (courseName.length > 100) {
+            return res.status(400).json({
+                success: false,
+                message: '课程名称长度不能超过100个字符'
+            });
+        }
+
+        if (courseCode.length > 50) {
+            return res.status(400).json({
+                success: false,
+                message: '课程代码长度不能超过50个字符'
+            });
+        }
+
+        const connection = await pool.getConnection();
+
+        try {
+            // 检查课程代码是否已存在
+            const [existingRows] = await connection.execute(
+                'SELECT id FROM course WHERE courseCode = ?',
+                [courseCode]
+            );
+
+            if (existingRows.length > 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: '课程代码已存在'
+                });
+            }
+
+            // 创建课程
+            const [result] = await connection.execute(
+                'INSERT INTO course (courseName, courseCode, teacherId, description) VALUES (?, ?, ?, ?)',
+                [courseName, courseCode, teacherId, description || null]
+            );
+
+            const courseId = result.insertId;
+
+            // 获取创建的课程信息
+            const [courseRows] = await connection.execute(
+                'SELECT * FROM course WHERE id = ?',
+                [courseId]
+            );
+
+            res.json({
+                success: true,
+                message: '课程创建成功',
+                data: courseRows[0]
+            });
+
+        } finally {
+            connection.release();
+        }
+
+    } catch (error) {
+        console.error('创建课程错误:', error);
+        res.status(500).json({
+            success: false,
+            message: '服务器错误'
+        });
+    }
+});
+
+// 2. 获取课程列表接口
+app.get('/api/courses', requireLogin, async (req, res) => {
+    try {
+        const userRole = req.user.userRole;
+        const userId = req.user.id;
+        const { teacherId } = req.query;
+
+        const connection = await pool.getConnection();
+
+        try {
+            let query = '';
+            let params = [];
+
+            if (userRole === 'teacher') {
+                // 老师查看自己创建的课程
+                query = `
+                    SELECT c.*, u.userName as teacherName
+                    FROM course c
+                    LEFT JOIN user u ON c.teacherId = u.id
+                    WHERE c.teacherId = ?
+                    ORDER BY c.createTime DESC
+                `;
+                params = [userId];
+            } else if (userRole === 'student') {
+                // 学生查看所有课程（包括班级关联的和自己选课的）
+                query = `
+                    SELECT DISTINCT c.*, u.userName as teacherName,
+                           CASE WHEN sc.id IS NOT NULL THEN 1 ELSE 0 END as isSelected,
+                           CASE WHEN EXISTS (
+                               SELECT 1 FROM course_class cc 
+                               INNER JOIN user student ON student.classId = cc.classId
+                               WHERE cc.courseId = c.id AND student.id = ?
+                           ) THEN 1 ELSE 0 END as isClassRelated
+                    FROM course c
+                    LEFT JOIN user u ON c.teacherId = u.id
+                    LEFT JOIN student_course sc ON c.id = sc.courseId AND sc.studentId = ?
+                    ORDER BY isSelected DESC, isClassRelated DESC, c.createTime DESC
+                `;
+                params = [userId, userId];
+            } else {
+                return res.status(403).json({
+                    success: false,
+                    message: '权限不足'
+                });
+            }
+
+            // 如果指定了teacherId，添加筛选条件（仅老师可用）
+            if (teacherId && userRole === 'teacher') {
+                query = query.replace('WHERE c.teacherId = ?', 'WHERE c.teacherId = ? AND c.teacherId = ?');
+                params.push(teacherId);
+            }
+
+            const [rows] = await connection.execute(query, params);
+
+            res.json({
+                success: true,
+                message: '获取课程列表成功',
+                data: rows
+            });
+
+        } finally {
+            connection.release();
+        }
+
+    } catch (error) {
+        console.error('获取课程列表错误:', error);
+        res.status(500).json({
+            success: false,
+            message: '服务器错误'
+        });
+    }
+});
+
+// 3. 获取课程详情接口（包含关联的班级）
+app.get('/api/courses/:id', requireLogin, async (req, res) => {
+    try {
+        const courseId = req.params.id;
+        const userRole = req.user.userRole;
+        const userId = req.user.id;
+
+        const connection = await pool.getConnection();
+
+        try {
+            // 获取课程基本信息
+            const [courseRows] = await connection.execute(
+                `SELECT c.*, u.userName as teacherName
+                 FROM course c
+                 LEFT JOIN user u ON c.teacherId = u.id
+                 WHERE c.id = ?`,
+                [courseId]
+            );
+
+            if (courseRows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: '课程不存在'
+                });
+            }
+
+            const course = courseRows[0];
+
+            // 权限验证：学生可以查看自己选课的课程或班级关联的课程，老师只能查看自己创建的课程
+            if (userRole === 'student') {
+                // 检查学生是否选课或班级是否关联
+                const [studentCourseRows] = await connection.execute(
+                    `SELECT 1 FROM (
+                        SELECT 1 FROM student_course WHERE courseId = ? AND studentId = ?
+                        UNION
+                        SELECT 1 FROM course_class cc
+                        INNER JOIN user student ON student.classId = cc.classId
+                        WHERE cc.courseId = ? AND student.id = ?
+                    ) AS t LIMIT 1`,
+                    [courseId, userId, courseId, userId]
+                );
+                // 学生可以查看所有课程，不需要权限限制（但实际使用中可能需要）
+                // 这里允许学生查看所有课程详情
+            } else if (userRole === 'teacher') {
+                if (Number(course.teacherId) !== Number(userId)) {
+                    return res.status(403).json({
+                        success: false,
+                        message: '无权查看此课程'
+                    });
+                }
+            }
+
+            // 获取关联的班级列表
+            const [classRows] = await connection.execute(
+                `SELECT c.id, c.className, c.classCode
+                 FROM class c
+                 INNER JOIN course_class cc ON c.id = cc.classId
+                 WHERE cc.courseId = ?
+                 ORDER BY c.className`,
+                [courseId]
+            );
+
+            course.classes = classRows;
+
+            res.json({
+                success: true,
+                message: '获取课程详情成功',
+                data: course
+            });
+
+        } finally {
+            connection.release();
+        }
+
+    } catch (error) {
+        console.error('获取课程详情错误:', error);
+        res.status(500).json({
+            success: false,
+            message: '服务器错误'
+        });
+    }
+});
+
+// 4. 更新课程接口（老师）
+app.put('/api/courses/:id', requireLogin, async (req, res) => {
+    try {
+        const courseId = req.params.id;
+        const teacherId = req.user.id;
+        const userRole = req.user.userRole;
+
+        // 验证用户是否为老师
+        if (userRole !== 'teacher') {
+            return res.status(403).json({
+                success: false,
+                message: '只有老师可以更新课程'
+            });
+        }
+
+        const { courseName, courseCode, description } = req.body;
+
+        const connection = await pool.getConnection();
+
+        try {
+            // 验证课程是否存在且属于当前老师
+            const [courseRows] = await connection.execute(
+                'SELECT * FROM course WHERE id = ? AND teacherId = ?',
+                [courseId, teacherId]
+            );
+
+            if (courseRows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: '课程不存在或无权修改'
+                });
+            }
+
+            // 如果更新了课程代码，检查是否重复
+            if (courseCode && courseCode !== courseRows[0].courseCode) {
+                const [existingRows] = await connection.execute(
+                    'SELECT id FROM course WHERE courseCode = ? AND id != ?',
+                    [courseCode, courseId]
+                );
+
+                if (existingRows.length > 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message: '课程代码已存在'
+                    });
+                }
+            }
+
+            // 更新课程
+            const updateFields = [];
+            const updateValues = [];
+
+            if (courseName !== undefined) {
+                updateFields.push('courseName = ?');
+                updateValues.push(courseName);
+            }
+            if (courseCode !== undefined) {
+                updateFields.push('courseCode = ?');
+                updateValues.push(courseCode);
+            }
+            if (description !== undefined) {
+                updateFields.push('description = ?');
+                updateValues.push(description);
+            }
+
+            if (updateFields.length === 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: '没有需要更新的字段'
+                });
+            }
+
+            updateValues.push(courseId);
+
+            await connection.execute(
+                `UPDATE course SET ${updateFields.join(', ')} WHERE id = ?`,
+                updateValues
+            );
+
+            // 获取更新后的课程信息
+            const [updatedRows] = await connection.execute(
+                'SELECT * FROM course WHERE id = ?',
+                [courseId]
+            );
+
+            res.json({
+                success: true,
+                message: '课程更新成功',
+                data: updatedRows[0]
+            });
+
+        } finally {
+            connection.release();
+        }
+
+    } catch (error) {
+        console.error('更新课程错误:', error);
+        res.status(500).json({
+            success: false,
+            message: '服务器错误'
+        });
+    }
+});
+
+// 5. 删除课程接口（老师）
+app.delete('/api/courses/:id', requireLogin, async (req, res) => {
+    try {
+        const courseId = req.params.id;
+        const teacherId = req.user.id;
+        const userRole = req.user.userRole;
+
+        // 验证用户是否为老师
+        if (userRole !== 'teacher') {
+            return res.status(403).json({
+                success: false,
+                message: '只有老师可以删除课程'
+            });
+        }
+
+        const connection = await pool.getConnection();
+
+        try {
+            // 验证课程是否存在且属于当前老师
+            const [courseRows] = await connection.execute(
+                'SELECT * FROM course WHERE id = ? AND teacherId = ?',
+                [courseId, teacherId]
+            );
+
+            if (courseRows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: '课程不存在或无权删除'
+                });
+            }
+
+            // 检查是否有签到任务关联此课程
+            const [taskRows] = await connection.execute(
+                'SELECT COUNT(*) as count FROM attendance_task WHERE courseId = ?',
+                [courseId]
+            );
+
+            if (taskRows[0].count > 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: '该课程下存在签到任务，无法删除'
+                });
+            }
+
+            // 删除课程（级联删除会同时删除course_class关联）
+            await connection.execute(
+                'DELETE FROM course WHERE id = ?',
+                [courseId]
+            );
+
+            res.json({
+                success: true,
+                message: '课程删除成功'
+            });
+
+        } finally {
+            connection.release();
+        }
+
+    } catch (error) {
+        console.error('删除课程错误:', error);
+        res.status(500).json({
+            success: false,
+            message: '服务器错误'
+        });
+    }
+});
+
+// 6. 为课程添加班级接口（老师）
+app.post('/api/courses/:id/classes', requireLogin, async (req, res) => {
+    try {
+        const courseId = req.params.id;
+        const teacherId = req.user.id;
+        const userRole = req.user.userRole;
+        const { classIds } = req.body; // 数组，可以一次添加多个班级
+
+        // 验证用户是否为老师
+        if (userRole !== 'teacher') {
+            return res.status(403).json({
+                success: false,
+                message: '只有老师可以为课程添加班级'
+            });
+        }
+
+        if (!Array.isArray(classIds) || classIds.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: '请提供有效的班级ID数组'
+            });
+        }
+
+        const connection = await pool.getConnection();
+
+        try {
+            // 验证课程是否存在且属于当前老师
+            const [courseRows] = await connection.execute(
+                'SELECT * FROM course WHERE id = ? AND teacherId = ?',
+                [courseId, teacherId]
+            );
+
+            if (courseRows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: '课程不存在或无权操作'
+                });
+            }
+
+            // 验证所有班级是否存在
+            const placeholders = classIds.map(() => '?').join(',');
+            const [classRows] = await connection.execute(
+                `SELECT id FROM class WHERE id IN (${placeholders})`,
+                classIds
+            );
+
+            if (classRows.length !== classIds.length) {
+                return res.status(400).json({
+                    success: false,
+                    message: '部分班级不存在'
+                });
+            }
+
+            // 批量插入关联关系（忽略已存在的）
+            const insertPromises = classIds.map(classId =>
+                connection.execute(
+                    'INSERT IGNORE INTO course_class (courseId, classId) VALUES (?, ?)',
+                    [courseId, classId]
+                )
+            );
+
+            await Promise.all(insertPromises);
+
+            // 获取更新后的班级列表
+            const [updatedClassRows] = await connection.execute(
+                `SELECT c.id, c.className, c.classCode
+                 FROM class c
+                 INNER JOIN course_class cc ON c.id = cc.classId
+                 WHERE cc.courseId = ?
+                 ORDER BY c.className`,
+                [courseId]
+            );
+
+            res.json({
+                success: true,
+                message: '班级添加成功',
+                data: updatedClassRows
+            });
+
+        } finally {
+            connection.release();
+        }
+
+    } catch (error) {
+        console.error('添加班级错误:', error);
+        res.status(500).json({
+            success: false,
+            message: '服务器错误'
+        });
+    }
+});
+
+// 7. 学生选课接口
+app.post('/api/courses/:id/select', requireLogin, async (req, res) => {
+    try {
+        const courseId = req.params.id;
+        const studentId = req.user.id;
+        const userRole = req.user.userRole;
+
+        // 验证用户是否为学生
+        if (userRole !== 'student') {
+            return res.status(403).json({
+                success: false,
+                message: '只有学生可以选课'
+            });
+        }
+
+        const connection = await pool.getConnection();
+
+        try {
+            // 验证课程是否存在
+            const [courseRows] = await connection.execute(
+                'SELECT * FROM course WHERE id = ?',
+                [courseId]
+            );
+
+            if (courseRows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: '课程不存在'
+                });
+            }
+
+            // 检查是否已经选过该课程
+            const [existingRows] = await connection.execute(
+                'SELECT * FROM student_course WHERE studentId = ? AND courseId = ?',
+                [studentId, courseId]
+            );
+
+            if (existingRows.length > 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: '您已经选过该课程了'
+                });
+            }
+
+            // 添加选课记录
+            try {
+                await connection.execute(
+                    'INSERT INTO student_course (studentId, courseId) VALUES (?, ?)',
+                    [studentId, courseId]
+                );
+
+                res.json({
+                    success: true,
+                    message: '选课成功'
+                });
+            } catch (insertError) {
+                console.error('插入选课记录失败:', insertError);
+                // 如果是重复键错误，说明已经选过课了
+                if (insertError.code === 'ER_DUP_ENTRY') {
+                    return res.status(400).json({
+                        success: false,
+                        message: '您已经选过该课程了'
+                    });
+                }
+                // 如果是表不存在错误
+                if (insertError.code === 'ER_NO_SUCH_TABLE') {
+                    return res.status(500).json({
+                        success: false,
+                        message: '数据库表不存在，请先执行数据库迁移脚本创建student_course表'
+                    });
+                }
+                throw insertError; // 重新抛出其他错误
+            }
+
+        } finally {
+            connection.release();
+        }
+
+    } catch (error) {
+        console.error('选课错误:', error);
+        console.error('错误详情:', {
+            code: error.code,
+            errno: error.errno,
+            sqlMessage: error.sqlMessage,
+            sql: error.sql
+        });
+        
+        // 根据错误类型返回更具体的错误信息
+        let errorMessage = '服务器错误';
+        if (error.code === 'ER_NO_SUCH_TABLE') {
+            errorMessage = '数据库表不存在，请先执行数据库迁移脚本';
+        } else if (error.code === 'ER_DUP_ENTRY') {
+            errorMessage = '您已经选过该课程了';
+        } else if (error.code === 'ER_NO_REFERENCED_ROW_2') {
+            errorMessage = '课程不存在';
+        } else if (error.sqlMessage) {
+            errorMessage = `数据库错误: ${error.sqlMessage}`;
+        }
+        
+        res.status(500).json({
+            success: false,
+            message: errorMessage,
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// 8. 学生退课接口
+app.delete('/api/courses/:id/select', requireLogin, async (req, res) => {
+    try {
+        const courseId = req.params.id;
+        const studentId = req.user.id;
+        const userRole = req.user.userRole;
+
+        // 验证用户是否为学生
+        if (userRole !== 'student') {
+            return res.status(403).json({
+                success: false,
+                message: '只有学生可以退课'
+            });
+        }
+
+        const connection = await pool.getConnection();
+
+        try {
+            // 删除选课记录
+            const [result] = await connection.execute(
+                'DELETE FROM student_course WHERE studentId = ? AND courseId = ?',
+                [studentId, courseId]
+            );
+
+            if (result.affectedRows === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: '您未选择该课程'
+                });
+            }
+
+            res.json({
+                success: true,
+                message: '退课成功'
+            });
+
+        } finally {
+            connection.release();
+        }
+
+    } catch (error) {
+        console.error('退课错误:', error);
+        res.status(500).json({
+            success: false,
+            message: '服务器错误'
+        });
+    }
+});
+
+// 9. 从课程移除班级接口（老师）
+app.delete('/api/courses/:id/classes/:classId', requireLogin, async (req, res) => {
+    try {
+        const courseId = req.params.id;
+        const classId = req.params.classId;
+        const teacherId = req.user.id;
+        const userRole = req.user.userRole;
+
+        // 验证用户是否为老师
+        if (userRole !== 'teacher') {
+            return res.status(403).json({
+                success: false,
+                message: '只有老师可以从课程移除班级'
+            });
+        }
+
+        const connection = await pool.getConnection();
+
+        try {
+            // 验证课程是否存在且属于当前老师
+            const [courseRows] = await connection.execute(
+                'SELECT * FROM course WHERE id = ? AND teacherId = ?',
+                [courseId, teacherId]
+            );
+
+            if (courseRows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: '课程不存在或无权操作'
+                });
+            }
+
+            // 删除关联关系
+            const [result] = await connection.execute(
+                'DELETE FROM course_class WHERE courseId = ? AND classId = ?',
+                [courseId, classId]
+            );
+
+            if (result.affectedRows === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: '该班级未关联到此课程'
+                });
+            }
+
+            res.json({
+                success: true,
+                message: '班级移除成功'
+            });
+
+        } finally {
+            connection.release();
+        }
+
+    } catch (error) {
+        console.error('移除班级错误:', error);
+        res.status(500).json({
+            success: false,
+            message: '服务器错误'
+        });
+    }
+});
+
+// ==================== 签到任务管理接口 ====================
+
+// 老师发布签到任务接口（针对课程发布，推送给课程关联的所有班级）
 app.post('/api/attendance-task', requireLogin, async (req, res) => {
     try {
         const teacherId = req.user.id;
         const userRole = req.user.userRole;
-        const sessionClassId = req.user.classId;
 
         // 验证用户是否为老师
         if (userRole !== 'teacher') {
@@ -706,8 +1443,15 @@ app.post('/api/attendance-task', requireLogin, async (req, res) => {
             });
         }
 
-        // 从请求体读取持续时间（单位：分钟），仅接受一个字段 duration
-        const { duration } = req.body || {};
+        // 从请求体读取课程ID和持续时间
+        const { courseId, duration } = req.body || {};
+
+        if (!courseId) {
+            return res.status(400).json({
+                success: false,
+                message: '请提供课程ID（courseId）'
+            });
+        }
 
         if (typeof duration !== 'number' || !(duration > 0)) {
             return res.status(400).json({
@@ -723,15 +1467,6 @@ app.post('/api/attendance-task', requireLogin, async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: '持续时长不能小于 1 分钟'
-            });
-        }
-
-        // 从 session 读取班级 ID
-        const classId = sessionClassId;
-        if (!classId) {
-            return res.status(422).json({
-                success: false,
-                message: '未能确定当前班级，请先设置班级上下文或重新登录'
             });
         }
 
@@ -757,78 +1492,78 @@ app.post('/api/attendance-task', requireLogin, async (req, res) => {
         const connection = await pool.getConnection();
 
         try {
-            // 验证班级是否存在
-            const [classRows] = await connection.execute(
-                'SELECT id FROM class WHERE id = ?',
-                [classId]
+            // 验证课程是否存在且属于当前老师
+            const [courseRows] = await connection.execute(
+                `SELECT c.*, u.userName as teacherName
+                 FROM course c
+                 LEFT JOIN user u ON c.teacherId = u.id
+                 WHERE c.id = ? AND c.teacherId = ?`,
+                [courseId, teacherId]
             );
+
+            if (courseRows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    message: '课程不存在或无权操作'
+                });
+            }
+
+            const course = courseRows[0];
+
+            // 获取课程关联的所有班级
+            const [classRows] = await connection.execute(
+                `SELECT c.id, c.className, c.classCode
+                 FROM class c
+                 INNER JOIN course_class cc ON c.id = cc.classId
+                 WHERE cc.courseId = ?`,
+                [courseId]
+            );
+
             if (classRows.length === 0) {
                 return res.status(400).json({
                     success: false,
-                    message: '选择的班级不存在'
+                    message: '该课程未关联任何班级，请先为课程添加班级'
                 });
             }
 
-            // 验证教师是否有权限为该班级发布签到任务
-            const [teacherRows] = await connection.execute(
-                'SELECT classId FROM user WHERE id = ? AND userRole = ?',
-                [teacherId, 'teacher']
-            );
-            if (teacherRows.length === 0) {
-                return res.status(403).json({
-                    success: false,
-                    message: '教师信息不存在'
-                });
-            }
-
-            const teacherClassId = teacherRows[0].classId;
-            if (Number(teacherClassId) !== Number(classId)) {
-                return res.status(403).json({
-                    success: false,
-                    message: '您只能为自己所在的班级发布签到任务'
-                });
-            }
-
-            // 创建签到任务（保持表结构不变）
+            // 创建签到任务（关联课程）
             const [result] = await connection.execute(
-                'INSERT INTO attendance_task (taskName, teacherId, classId, startTime, endTime) VALUES (?, ?, ?, ?, ?)',
-                [taskName, teacherId, classId, startTime, endTime]
+                'INSERT INTO attendance_task (taskName, teacherId, courseId, startTime, endTime) VALUES (?, ?, ?, ?, ?)',
+                [taskName, teacherId, courseId, startTime, endTime]
             );
 
             const taskId = result.insertId;
 
-            // 获取班级名称和老师信息用于推送
-            const [taskInfoRows] = await connection.execute(
-                `SELECT at.*, c.className, u.userName as teacherName
-                 FROM attendance_task at
-                 LEFT JOIN class c ON at.classId = c.id
-                 LEFT JOIN user u ON at.teacherId = u.id
-                 WHERE at.id = ?`,
-                [taskId]
-            );
-
-            const taskInfo = taskInfoRows[0];
-
-            // 通过 Socket.IO 实时推送给对应班级的所有学生
+            // 通过 Socket.IO 实时推送给课程关联的所有班级的学生
             if (global.io) {
-                const roomName = `class-${classId}`;
-                global.io.to(roomName).emit('new-task', {
-                    success: true,
-                    message: '收到新的签到任务',
-                    task: {
+                const taskInfo = {
                         id: taskId,
                         taskName: taskName,
-                        classId: classId,
-                        className: taskInfo.className,
+                    courseId: courseId,
+                    courseName: course.courseName,
+                    courseCode: course.courseCode,
                         teacherId: teacherId,
-                        teacherName: taskInfo.teacherName,
+                    teacherName: course.teacherName,
                         startTime: startTime,
                         endTime: endTime,
-                        createTime: taskInfo.createTime,
+                    createTime: formatDateTimeLocal(now),
                         status: 'active'
+                };
+
+                // 推送给每个关联的班级
+                classRows.forEach(classInfo => {
+                    const roomName = `class-${classInfo.id}`;
+                    global.io.to(roomName).emit('new-task', {
+                        success: true,
+                        message: '收到新的签到任务',
+                        task: {
+                            ...taskInfo,
+                            classId: classInfo.id,
+                            className: classInfo.className
                     }
                 });
                 console.log(`[Socket.IO] 签到任务已推送给房间: ${roomName}, 任务ID: ${taskId}`);
+                });
             }
 
             res.json({
@@ -837,9 +1572,11 @@ app.post('/api/attendance-task', requireLogin, async (req, res) => {
                 data: {
                     taskId: taskId,
                     taskName: taskName,
-                    classId: classId,
+                    courseId: courseId,
+                    courseName: course.courseName,
                     startTime: startTime,
-                    endTime: endTime
+                    endTime: endTime,
+                    affectedClasses: classRows.map(c => ({ id: c.id, className: c.className }))
                 }
             });
 
@@ -856,12 +1593,12 @@ app.post('/api/attendance-task', requireLogin, async (req, res) => {
     }
 });
 
-// 获取签到任务列表接口
+// 获取签到任务列表接口（支持按课程筛选）
 app.get('/api/attendance-tasks', requireLogin, async (req, res) => {
     try {
         const userRole = req.user.userRole;
         const userId = req.user.id;
-        const { classId } = req.query;
+        const { courseId } = req.query;
 
         const connection = await pool.getConnection();
 
@@ -870,36 +1607,43 @@ app.get('/api/attendance-tasks', requireLogin, async (req, res) => {
             let params = [];
 
             if (userRole === 'teacher') {
-                // 老师查看自己发布的任务
+                // 老师查看自己发布的任务（基于课程）
                 query = `
-                    SELECT at.*, c.className, u.userName as teacherName
+                    SELECT at.*, co.courseName, co.courseCode, u.userName as teacherName
                     FROM attendance_task at
-                    LEFT JOIN class c ON at.classId = c.id
+                    LEFT JOIN course co ON at.courseId = co.id
                     LEFT JOIN user u ON at.teacherId = u.id
                     WHERE at.teacherId = ?
                 `;
                 params = [userId];
 
-                if (classId) {
-                    query += ' AND at.classId = ?';
-                    params.push(classId);
+                if (courseId) {
+                    query += ' AND at.courseId = ?';
+                    params.push(courseId);
                 }
             } else if (userRole === 'student') {
-                // 学生查看自己班级的任务
+                // 学生只查看自己明确选择的课程的签到任务
                 query = `
-                    SELECT at.*, c.className, u.userName as teacherName,
+                    SELECT at.*, co.courseName, co.courseCode, u.userName as teacherName,
                            CASE WHEN EXISTS (
                                SELECT 1
                                FROM attendance_record ar
                                WHERE ar.taskId = at.id AND ar.userId = ? AND ar.status = 1
                            ) THEN 1 ELSE 0 END AS hasCheckedIn
                     FROM attendance_task at
-                    LEFT JOIN class c ON at.classId = c.id
+                    LEFT JOIN course co ON at.courseId = co.id
                     LEFT JOIN user u ON at.teacherId = u.id
-                    LEFT JOIN user student ON student.id = ?
-                    WHERE at.classId = student.classId
+                    WHERE EXISTS (
+                        SELECT 1 FROM student_course sc 
+                        WHERE sc.courseId = co.id AND sc.studentId = ?
+                    )
                 `;
                 params = [userId, userId];
+
+                if (courseId) {
+                    query += ' AND at.courseId = ?';
+                    params.push(courseId);
+                }
             } else {
                 return res.status(403).json({
                     success: false,
@@ -992,28 +1736,41 @@ app.get('/api/attendance-stats', requireLogin, async (req, res) => {
 
             const task = taskRows[0];
 
-            // 获取班级学生总数
+            // 获取课程的所有学生总数（只统计明确选课的学生）
             const [studentRows] = await connection.execute(
-                'SELECT COUNT(*) as total FROM user WHERE classId = ? AND userRole = "student"',
-                [task.classId]
+                `SELECT COUNT(DISTINCT u.id) as total
+                 FROM user u
+                 INNER JOIN student_course sc ON u.id = sc.studentId
+                 WHERE u.userRole = 'student'
+                 AND sc.courseId = ?`,
+                [task.courseId]
             );
 
-            // 获取已签到学生数
+            // 获取已签到学生数（只统计明确选课的学生）
+            // 注意：签到记录可能已经存在，但需要确保该学生确实选课了
             const [attendanceRows] = await connection.execute(
-                'SELECT COUNT(DISTINCT userId) as checked FROM attendance_record WHERE taskId = ? AND status = 1',
-                [taskId]
+                `SELECT COUNT(DISTINCT ar.userId) as checked 
+                 FROM attendance_record ar
+                 INNER JOIN user u ON ar.userId = u.id
+                 INNER JOIN student_course sc ON u.id = sc.studentId AND sc.courseId = ?
+                 WHERE ar.taskId = ? AND ar.status = 1
+                 AND u.userRole = 'student'`,
+                [task.courseId, taskId]
             );
 
-            // 获取所有学生信息（包括已签到和未签到的）
+            // 获取所有学生信息（只统计明确选课的学生）
+            // 使用LEFT JOIN attendance_record来显示所有选课学生，包括已签到和未签到的
             const [detailRows] = await connection.execute(
-                `SELECT u.id as userId, u.userName, u.userAccount, 
+                `SELECT DISTINCT u.id as userId, u.userName, u.userAccount, u.classId, c.className,
                         ar.checkTime, 
                         CASE WHEN ar.id IS NOT NULL AND ar.status = 1 THEN 1 ELSE 0 END as status
                  FROM user u
-                 LEFT JOIN attendance_record ar ON u.id = ar.userId AND ar.taskId = ?
-                 WHERE u.classId = ? AND u.userRole = 'student'
+                 INNER JOIN student_course sc ON u.id = sc.studentId AND sc.courseId = ?
+                 LEFT JOIN class c ON u.classId = c.id
+                 LEFT JOIN attendance_record ar ON u.id = ar.userId AND ar.taskId = ? AND ar.status = 1
+                 WHERE u.userRole = 'student'
                  ORDER BY status DESC, ar.checkTime DESC, u.userAccount ASC`,
-                [taskId, task.classId]
+                [task.courseId, taskId]
             );
 
             res.json({
@@ -1234,16 +1991,17 @@ io.on('connection', (socket) => {
             const connection = await pool.getConnection();
             try {
                 const [rows] = await connection.execute(
-                    `SELECT at.*, c.className, u.userName as teacherName,
+                    `SELECT at.*, co.courseName, co.courseCode, u.userName as teacherName,
                             CASE WHEN EXISTS (
                                 SELECT 1
                                 FROM attendance_record ar
                                 WHERE ar.taskId = at.id AND ar.userId = ? AND ar.status = 1
                             ) THEN 1 ELSE 0 END AS hasCheckedIn
                      FROM attendance_task at
-                     LEFT JOIN class c ON at.classId = c.id
+                     LEFT JOIN course co ON at.courseId = co.id
                      LEFT JOIN user u ON at.teacherId = u.id
-                     WHERE at.classId = ?
+                     INNER JOIN course_class cc ON co.id = cc.courseId
+                     WHERE cc.classId = ?
                      ORDER BY at.createTime DESC`,
                     [socket.userId, socket.classId]
                 );

@@ -18,6 +18,14 @@
 				<uni-icons type="gear-filled" size="25"></uni-icons>
 				<view class="text">设置</view>
 			</view>
+			<view class="courses section" v-if="proxy.$config.get('isLogin') && !isStudent()" @click="goToCourses">
+				<uni-icons type="gear-filled" size="25"></uni-icons>
+				<view class="text">课程管理</view>
+			</view>
+			<view class="select-course section" v-if="proxy.$config.get('isLogin') && isStudent()" @click="goToSelectCourse">
+				<uni-icons type="gear-filled" size="25"></uni-icons>
+				<view class="text">选课</view>
+			</view>
 			<view class="faceUpload section" v-if="proxy.$config.get('isLogin')" @click="faceClick">
 				<uni-icons type="gear-filled" size="25"></uni-icons>
 				<view class="text">上传照片</view>
@@ -33,7 +41,7 @@
 <script setup>
 	import { onLoad,onShow} from '@dcloudio/uni-app';
 	import {ref,computed} from 'vue';
-	import {logOut} from '../../utils/utils';
+	import {logOut, isStudent} from '../../utils/utils';
 	import { getCurrentInstance } from 'vue'
 	
 	const {proxy}=getCurrentInstance();
@@ -77,6 +85,18 @@
 		// proxy.$config.set('isLogin',false);
 		proxy.$config.reset();
 		// userInfo_update(0);
+	}
+	
+	function goToCourses() {
+		uni.navigateTo({
+			url: '/pages/courses/courses'
+		});
+	}
+	
+	function goToSelectCourse() {
+		uni.navigateTo({
+			url: '/pages/select-course/select-course'
+		});
 	}
 	
 	function faceClick()	//人脸注册上传

@@ -6,6 +6,9 @@ USE face_recognition;
 -- 删除已存在的表（按依赖关系逆序删除）
 DROP TABLE IF EXISTS attendance_record;
 DROP TABLE IF EXISTS attendance_task;
+DROP TABLE IF EXISTS student_course;
+DROP TABLE IF EXISTS course_class;
+DROP TABLE IF EXISTS course;
 DROP TABLE IF EXISTS user;
 DROP TABLE IF EXISTS class;
 -- 0. 班级表 (class) - 需要在用户表之前创建
@@ -35,12 +38,58 @@ CREATE TABLE user (
   FOREIGN KEY (classId) REFERENCES class(id) ON DELETE
   SET NULL ON UPDATE CASCADE
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '用户信息表';
--- 2. 签到任务表 (attendance_task)
+-- 2. 课程表 (course)
+CREATE TABLE course (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '课程ID，主键',
+  courseName VARCHAR(100) NOT NULL COMMENT '课程名称',
+  courseCode VARCHAR(50) NOT NULL COMMENT '课程代码，唯一标识',
+  teacherId BIGINT NOT NULL COMMENT '授课老师ID，外键关联user表',
+  description TEXT NULL COMMENT '课程描述，可选',
+  createTime DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  updateTime DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  -- 唯一约束
+  UNIQUE KEY uk_courseCode (courseCode),
+  -- 外键约束
+  FOREIGN KEY (teacherId) REFERENCES user(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  -- 索引
+  INDEX idx_teacher (teacherId)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '课程信息表';
+-- 3. 课程-班级关联表 (course_class)
+CREATE TABLE course_class (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '关联ID，主键',
+  courseId BIGINT NOT NULL COMMENT '课程ID，外键关联course表',
+  classId BIGINT NOT NULL COMMENT '班级ID，外键关联class表',
+  createTime DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  -- 唯一约束：同一课程不能重复关联同一班级
+  UNIQUE KEY uk_course_class (courseId, classId),
+  -- 外键约束
+  FOREIGN KEY (courseId) REFERENCES course(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  FOREIGN KEY (classId) REFERENCES class(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  -- 索引
+  INDEX idx_course (courseId),
+  INDEX idx_class (classId)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '课程-班级关联表';
+-- 4. 学生-课程关联表 (student_course) - 学生选课表
+CREATE TABLE student_course (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '关联ID，主键',
+  studentId BIGINT NOT NULL COMMENT '学生ID，外键关联user表',
+  courseId BIGINT NOT NULL COMMENT '课程ID，外键关联course表',
+  createTime DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '选课时间',
+  -- 唯一约束：同一学生不能重复选择同一课程
+  UNIQUE KEY uk_student_course (studentId, courseId),
+  -- 外键约束
+  FOREIGN KEY (studentId) REFERENCES user(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  FOREIGN KEY (courseId) REFERENCES course(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  -- 索引
+  INDEX idx_student (studentId),
+  INDEX idx_course (courseId)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '学生-课程关联表（选课表）';
+-- 5. 签到任务表 (attendance_task)
 CREATE TABLE attendance_task (
   id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '任务ID，主键',
   taskName VARCHAR(100) NOT NULL COMMENT '签到任务名称',
   teacherId BIGINT NOT NULL COMMENT '发布老师ID，外键关联user表',
-  classId BIGINT NOT NULL COMMENT '目标班级ID，外键关联class表',
+  courseId BIGINT NOT NULL COMMENT '课程ID，外键关联course表',
   startTime DATETIME NOT NULL COMMENT '签到开始时间',
   endTime DATETIME NOT NULL COMMENT '签到结束时间',
   status ENUM('active', 'inactive', 'completed') DEFAULT 'active' COMMENT '任务状态，active-进行中，inactive-已结束，completed-已完成',
@@ -48,13 +97,13 @@ CREATE TABLE attendance_task (
   updateTime DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '任务更新时间',
   -- 外键约束
   FOREIGN KEY (teacherId) REFERENCES user(id) ON DELETE CASCADE ON UPDATE CASCADE,
-  FOREIGN KEY (classId) REFERENCES class(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  FOREIGN KEY (courseId) REFERENCES course(id) ON DELETE CASCADE ON UPDATE CASCADE,
   -- 索引
   INDEX idx_teacher (teacherId),
-  INDEX idx_class (classId),
+  INDEX idx_course (courseId),
   INDEX idx_time (startTime, endTime)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '签到任务表';
--- 3. 签到记录表 (attendance_record)
+-- 6. 签到记录表 (attendance_record)
 CREATE TABLE attendance_record (
   id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '记录ID，主键',
   userId BIGINT NOT NULL COMMENT '用户ID，外键关联user表',
@@ -126,5 +175,11 @@ SHOW TABLES;
 -- 显示各表结构
 DESCRIBE class;
 DESCRIBE user;
+DESCRIBE course;
+DESCRIBE course_class;
+DESCRIBE student_course;
 DESCRIBE attendance_task;
 DESCRIBE attendance_record;
+UPDATE user
+SET userPassword = '$2b$10$3Xio8vo6yq/jVdXggJJ5Euzbzr3TR/JTRolfmCL1JKouTZvRaRHEu'
+WHERE userRole = 'teacher';

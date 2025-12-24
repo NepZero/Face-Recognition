@@ -25,7 +25,7 @@
 			<view class="details-title">签到详情</view>
 			<view class="details-summary" v-if="statsData">
 				<text class="summary-text">
-					班级人数 {{ statsData.totalStudents }} 人，
+					课程学生 {{ statsData.totalStudents }} 人，
 					已签到 {{ statsData.checkedStudents }} 人，
 					未签到 {{ statsData.totalStudents - statsData.checkedStudents }} 人
 				</text>

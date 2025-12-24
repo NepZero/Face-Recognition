@@ -2,8 +2,8 @@
     "name" : "faceRecognition",
     "appid" : "__UNI__895BAF1",
     "description" : "",
-    "versionName" : "0.0.4",
-    "versionCode" : 4,
+    "versionName" : "0.0.5",
+    "versionCode" : 5,
     "transformPx" : false,
     /* 5+App特有相关 */
     "app-plus" : {

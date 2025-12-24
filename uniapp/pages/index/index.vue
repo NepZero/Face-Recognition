@@ -11,26 +11,80 @@
 		</button>
 		<button size="default" @click="testConnection" :loading=connection_flag>网络测试</button>
 		<button size="default" @click="ipconfig">网络配置</button>
+		<button size="default" @click="goToCourses" v-if="!studentFlag">课程管理</button>
 		<button size="default" @click="checkClick" v-if="!studentFlag">发布签到</button>
 		<!-- <button size="default" @click="testClick">用户信息</button> -->
 		
-		<!-- 签到任务列表 -->
-		<view class="task-list" v-if="tasks.length > 0">
-			<view class="task-title">签到任务</view>
-			<view class="task-item" v-for="(task, index) in tasks" :key="task.id">
-				<view class="task-content" @click="selectTask(task)">
-					<view class="task-name">{{ task.taskName }}</view>
-					<view class="task-info">
-						<text class="task-time">{{ formatTime(task.startTime) }} - {{ formatTime(task.endTime) }}</text>
-						<text class="task-status" :class="{'status-active': task.status === 'active', 'status-completed': task.status === 'completed'}">
-							{{ task.status === 'active' ? '进行中' : task.status === 'completed' ? '已完成' : '已结束' }}
-						</text>
+		<!-- 发布签到弹窗 -->
+		<view class="publish-modal" v-if="showPublishModal" @click.stop="closePublishModal">
+			<view class="publish-modal-content" @click.stop>
+				<view class="publish-modal-header">
+					<text class="publish-modal-title">发布签到</text>
+					<text class="publish-modal-close" @click="closePublishModal">×</text>
+				</view>
+				<view class="publish-modal-body">
+					<view class="publish-course-info">
+						<view class="course-info-item">
+							<text class="course-info-label">课程名称</text>
+							<text class="course-info-value">{{ selectedCourseForPublish?.courseName || '' }}</text>
+						</view>
+						<view class="course-info-item" v-if="selectedCourseForPublish?.courseCode">
+							<text class="course-info-label">课程代码</text>
+							<text class="course-info-value">{{ selectedCourseForPublish.courseCode }}</text>
+						</view>
 					</view>
-					<view class="task-teacher" v-if="task.teacherName">发布人：{{ task.teacherName }}</view>
+					<view class="publish-duration-input">
+						<text class="duration-label">持续时长（分钟）</text>
+						<input 
+							class="duration-input" 
+							type="number" 
+							v-model="publishDuration" 
+							placeholder="请输入时长，如：10" 
+							maxlength="3"
+							@input="validateDuration"
+						/>
+						<view class="duration-tips">
+							<text class="tip-item" @click="setDuration(5)">5分钟</text>
+							<text class="tip-item" @click="setDuration(10)">10分钟</text>
+							<text class="tip-item" @click="setDuration(15)">15分钟</text>
+							<text class="tip-item" @click="setDuration(30)">30分钟</text>
+						</view>
+					</view>
 				</view>
-				<view class="task-actions" v-if="!studentFlag">
-					<button class="stats-btn" @click.stop="viewStats(task)">查看统计</button>
+				<view class="publish-modal-footer">
+					<button class="publish-btn cancel-btn" @click="closePublishModal">取消</button>
+					<button class="publish-btn confirm-btn" @click="confirmPublish" :disabled="!canPublish">发布</button>
 				</view>
+			</view>
+		</view>
+		
+		<!-- 签到任务列表 -->
+		<view class="task-list">
+			<view class="task-title">签到任务</view>
+			<view v-if="tasks.length > 0">
+				<view class="task-item" v-for="(task, index) in tasks" :key="task.id">
+					<view class="task-content" @click="selectTask(task)">
+						<view class="task-name">{{ task.taskName }}</view>
+						<view class="task-course" v-if="task.courseName">
+							<text class="course-label">课程：</text>
+							<text class="course-name">{{ task.courseName }}</text>
+							<text class="course-code" v-if="task.courseCode">({{ task.courseCode }})</text>
+						</view>
+						<view class="task-info">
+							<text class="task-time">{{ formatTime(task.startTime) }} - {{ formatTime(task.endTime) }}</text>
+							<text class="task-status" :class="{'status-active': task.status === 'active', 'status-completed': task.status === 'completed'}">
+								{{ task.status === 'active' ? '进行中' : task.status === 'completed' ? '已完成' : '已结束' }}
+							</text>
+						</view>
+						<view class="task-teacher" v-if="task.teacherName">发布人：{{ task.teacherName }}</view>
+					</view>
+					<view class="task-actions" v-if="!studentFlag">
+						<button class="stats-btn" @click.stop="viewStats(task)">查看统计</button>
+					</view>
+				</view>
+			</view>
+			<view class="task-empty" v-else>
+				<text class="empty-text">{{ studentFlag ? '暂无签到任务' : '您还没有发布签到任务' }}</text>
 			</view>
 		</view>
 	</scroll-view>
@@ -52,6 +106,12 @@
 	const selectedTask=ref(null); // 当前选中的任务
 	const hasShownFaceTip=ref(false); // 是否已显示过人脸注册提示
 	const showFaceTip=ref(false); // 是否显示人脸注册提示条
+	const courses=ref([]); // 存储课程列表
+	const showCoursePicker=ref(false); // 是否显示课程选择器
+	const selectedCourse=ref(null); // 当前选中的课程
+	const showPublishModal=ref(false); // 是否显示发布签到弹窗
+	const selectedCourseForPublish=ref(null); // 用于发布的课程
+	const publishDuration=ref(''); // 发布签到的持续时长
 	
 	
 	onLoad(()=>{
@@ -59,6 +119,9 @@
 		studentFlag.value=isStudent();
 		getTasks(); // 页面加载时立即获取一次任务列表
 		updateFaceTipStatus(); // 检查人脸注册状态
+		if(!studentFlag.value) {
+			getCourses(); // 老师用户加载课程列表
+		}
 	})
 	onShow(()=>{
 		// 页面显示时重新检查用户角色（可能在另一个页面登录了）
@@ -66,6 +129,9 @@
 		getTasks(); // 页面显示时也获取一次任务列表
 		// 只有学生用户才需要检查人脸注册状态
 		updateFaceTipStatus();
+		if(!studentFlag.value) {
+			getCourses(); // 老师用户加载课程列表
+		}
 	})
 	
 	function updateFaceTipStatus() {
@@ -234,21 +300,135 @@
 		})
 	}
 	
+	function getCourses() {
+		uni.request({
+			url: 'http://' + proxy.$config.get('ip') + '/api/courses',
+			method: 'GET',
+			timeout: 5000,
+			header: { 'Authorization': tokenGet() },
+			success: (res) => {
+				const response = res.data || res;
+				if (response.success && response.data) {
+					courses.value = response.data;
+				} else {
+					courses.value = [];
+				}
+			},
+			fail: (err) => {
+				console.error('获取课程列表失败:', err);
+			}
+		});
+	}
+	
+	function goToCourses() {
+		uni.navigateTo({
+			url: '/pages/courses/courses'
+		});
+	}
+	
 	function checkClick()		//老师发布签到按钮
 	{
+		// 如果没有课程，提示先创建课程
+		if(courses.value.length === 0) {
+			uni.showModal({
+				title: '提示',
+				content: '您还没有创建课程，请先创建课程后再发布签到任务。',
+				showCancel: true,
+				confirmText: '去创建',
+				cancelText: '取消',
+				success: (res) => {
+					if(res.confirm) {
+						goToCourses();
+					}
+				}
+			});
+			return;
+		}
+		
+		// 如果只有一个课程，直接使用；如果有多个，让用户选择
+		if(courses.value.length === 1) {
+			openPublishModal(courses.value[0]);
+		} else {
+			// 显示课程选择器
+			const courseNames = courses.value.map(c => c.courseName);
+			uni.showActionSheet({
+				itemList: courseNames,
+				success: (res) => {
+					const selectedCourse = courses.value[res.tapIndex];
+					// 选择课程后，打开发布弹窗
+					openPublishModal(selectedCourse);
+				},
+				fail: (err) => {
+					console.log('取消选择');
+				}
+			});
+		}
+	}
+	
+	function openPublishModal(course) {
+		selectedCourseForPublish.value = course;
+		publishDuration.value = '';
+		showPublishModal.value = true;
+	}
+	
+	function closePublishModal() {
+		showPublishModal.value = false;
+		selectedCourseForPublish.value = null;
+		publishDuration.value = '';
+	}
+	
+	function setDuration(minutes) {
+		publishDuration.value = String(minutes);
+	}
+	
+	function validateDuration() {
+		// 确保输入的是正整数
+		const value = publishDuration.value.replace(/[^\d]/g, '');
+		if(value !== publishDuration.value) {
+			publishDuration.value = value;
+		}
+	}
+	
+	const canPublish = computed(() => {
+		const duration = parseInt(publishDuration.value);
+		return !isNaN(duration) && duration > 0 && duration <= 1440; // 最多24小时
+	});
+	
+	function confirmPublish() {
+		if(!canPublish.value) {
+			uni.showToast({
+				title: '请输入有效的时长（1-1440分钟）',
+				icon: 'error'
+			});
+			return;
+		}
+		
+		const duration = parseInt(publishDuration.value);
+		publishTask(selectedCourseForPublish.value.id, duration);
+		closePublishModal();
+	}
+	
+	function publishTask(courseId, duration) {
+		uni.showLoading({
+			title: '发布中...',
+			mask: true
+		});
 		uni.request({
-			url:'http://'+proxy.$config.get('ip')+'/api/attendance-task',
-			method:'POST',
-			timeout:5000,
-			data:{'duration':10},
-			header:{'Authorization':tokenGet()},
+			url: 'http://' + proxy.$config.get('ip') + '/api/attendance-task',
+			method: 'POST',
+			timeout: 5000,
+			data: {
+				courseId: courseId,
+				duration: duration
+			},
+			header: { 'Authorization': tokenGet() },
 			success: (res) => {
 				const response = res.data || res;
 				if(response.success)
 				{
 					uni.showToast({
-						title:"发布签到成功",
-						icon:'success'
+						title: "发布签到成功",
+						icon: 'success'
 					});
 					// 发布成功后刷新任务列表
 					setTimeout(() => {
@@ -259,15 +439,18 @@
 				{
 					uni.showToast({
 						title: response.message || "发布签到失败",
-						icon:'error'
+						icon: 'error'
 					})
 				}
 			},
 			fail: (res) => {
 				uni.showToast({
-					title:"发布签到失败",
-					icon:'error'
+					title: "发布签到失败",
+					icon: 'error'
 				})
+			},
+			complete: () => {
+				uni.hideLoading();
 			}
 		})
 	}
@@ -290,22 +473,41 @@
 			success: (res) => {
 				// uni.request 返回的数据在 res.data 中
 				const response = res.data || res;
-				if(response.success && response.data)
+				console.log('获取任务列表响应:', response);
+				if(response.success)
 				{
-					tasks.value = response.data;
-					task_flag.value = response.data.length > 0;
-					console.log('获取任务列表成功:', response.data);
+					if(response.data && Array.isArray(response.data))
+					{
+						tasks.value = response.data;
+						task_flag.value = response.data.length > 0;
+						console.log('获取任务列表成功，任务数量:', response.data.length);
+					}
+					else
+					{
+						tasks.value = [];
+						task_flag.value = false;
+						console.log('任务列表为空');
+					}
 				}
 				else
 				{
 					tasks.value = [];
 					task_flag.value = false;
+					console.error('获取任务列表失败:', response.message);
+					if(response.message) {
+						uni.showToast({
+							title: response.message,
+							icon: 'none',
+							duration: 2000
+						});
+					}
 				}
 			},
-			fail: (res) => {
-				console.log('获取任务列表失败:', res);
+			fail: (err) => {
+				console.error('获取任务列表请求失败:', err);
 				tasks.value = [];
 				task_flag.value = false;
+				// 不显示错误提示，避免频繁弹窗
 			}
 		})
 	}
@@ -451,6 +653,16 @@
 			text-align: center;
 		}
 		
+		.task-empty{
+			text-align: center;
+			padding: 60rpx 0;
+		}
+		
+		.empty-text{
+			font-size: 28rpx;
+			color: #999;
+		}
+		
 		.task-item{
 			background-color: rgba(255, 255, 255, 0.9);
 			border-radius: 15rpx;
@@ -520,6 +732,30 @@
 			color: #2196f3;
 		}
 		
+		.task-course{
+			font-size: 26rpx;
+			color: #666;
+			margin-bottom: 10rpx;
+			display: flex;
+			align-items: center;
+		}
+		
+		.course-label{
+			color: #999;
+			margin-right: 5rpx;
+		}
+		
+		.course-name{
+			color: #667eea;
+			font-weight: 500;
+			margin-right: 10rpx;
+		}
+		
+		.course-code{
+			font-size: 22rpx;
+			color: #999;
+		}
+		
 		.task-teacher{
 			font-size: 24rpx;
 			color: #999;
@@ -551,6 +787,194 @@
 				border-radius: 20rpx;
 				font-size: 24rpx;
 				margin-left: 20rpx;
+			}
+		}
+		
+		/* 发布签到弹窗样式 */
+		.publish-modal{
+			position: fixed;
+			top: 0;
+			left: 0;
+			right: 0;
+			bottom: 0;
+			background-color: rgba(0, 0, 0, 0.5);
+			display: flex;
+			justify-content: center;
+			align-items: center;
+			z-index: 1000;
+			backdrop-filter: blur(5rpx);
+		}
+		
+		.publish-modal-content{
+			width: 85%;
+			max-width: 600rpx;
+			background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
+			border-radius: 30rpx;
+			box-shadow: 0 20rpx 60rpx rgba(0, 0, 0, 0.3);
+			overflow: hidden;
+			animation: modalSlideIn 0.3s ease-out;
+		}
+		
+		@keyframes modalSlideIn {
+			from {
+				opacity: 0;
+				transform: translateY(-50rpx) scale(0.9);
+			}
+			to {
+				opacity: 1;
+				transform: translateY(0) scale(1);
+			}
+		}
+		
+		.publish-modal-header{
+			background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+			padding: 40rpx 30rpx 30rpx;
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+		}
+		
+		.publish-modal-title{
+			font-size: 36rpx;
+			font-weight: bold;
+			color: #fff;
+		}
+		
+		.publish-modal-close{
+			font-size: 50rpx;
+			color: rgba(255, 255, 255, 0.9);
+			line-height: 1;
+			width: 50rpx;
+			height: 50rpx;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			border-radius: 50%;
+			background-color: rgba(255, 255, 255, 0.2);
+		}
+		
+		.publish-modal-body{
+			padding: 40rpx 30rpx;
+		}
+		
+		.publish-course-info{
+			background: linear-gradient(135deg, #f0f4ff 0%, #e8f0ff 100%);
+			border-radius: 20rpx;
+			padding: 30rpx;
+			margin-bottom: 40rpx;
+			border: 2rpx solid #667eea;
+		}
+		
+		.course-info-item{
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			margin-bottom: 20rpx;
+			&:last-child{
+				margin-bottom: 0;
+			}
+		}
+		
+		.course-info-label{
+			font-size: 28rpx;
+			color: #666;
+		}
+		
+		.course-info-value{
+			font-size: 30rpx;
+			font-weight: bold;
+			color: #667eea;
+		}
+		
+		.publish-duration-input{
+			.duration-label{
+				display: block;
+				font-size: 28rpx;
+				color: #333;
+				margin-bottom: 20rpx;
+				font-weight: 500;
+			}
+			
+			.duration-input{
+				width: 100%;
+				height: 90rpx;
+				padding: 0 30rpx;
+				background-color: #fff;
+				border: 2rpx solid #e0e0e0;
+				border-radius: 15rpx;
+				font-size: 32rpx;
+				color: #333;
+				box-sizing: border-box;
+				transition: all 0.3s;
+				&:focus{
+					border-color: #667eea;
+					box-shadow: 0 0 0 4rpx rgba(102, 126, 234, 0.1);
+				}
+			}
+			
+			.duration-tips{
+				display: flex;
+				gap: 15rpx;
+				margin-top: 25rpx;
+				flex-wrap: wrap;
+			}
+			
+			.tip-item{
+				padding: 12rpx 25rpx;
+				background: linear-gradient(135deg, #f0f4ff 0%, #e8f0ff 100%);
+				border-radius: 20rpx;
+				font-size: 24rpx;
+				color: #667eea;
+				border: 1rpx solid #667eea;
+				transition: all 0.3s;
+				&:active{
+					background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+					color: #fff;
+					transform: scale(0.95);
+				}
+			}
+		}
+		
+		.publish-modal-footer{
+			display: flex;
+			gap: 20rpx;
+			padding: 30rpx;
+			border-top: 1rpx solid #eee;
+			background-color: #fafafa;
+		}
+		
+		.publish-btn{
+			flex: 1;
+			height: 90rpx;
+			line-height: 90rpx;
+			border-radius: 15rpx;
+			font-size: 32rpx;
+			border: none;
+			font-weight: 500;
+			transition: all 0.3s;
+		}
+		
+		.cancel-btn{
+			background-color: #f5f5f5;
+			color: #666;
+			&:active{
+				background-color: #e0e0e0;
+				transform: scale(0.98);
+			}
+		}
+		
+		.confirm-btn{
+			background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+			color: #fff;
+			box-shadow: 0 4rpx 15rpx rgba(102, 126, 234, 0.4);
+			&:active{
+				transform: scale(0.98);
+				box-shadow: 0 2rpx 8rpx rgba(102, 126, 234, 0.3);
+			}
+			&:disabled{
+				background: #ccc;
+				box-shadow: none;
+				color: #999;
 			}
 		}
 	}

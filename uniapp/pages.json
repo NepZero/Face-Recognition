@@ -33,6 +33,20 @@
 			{
 				"navigationBarTitleText" : "签到统计"
 			}
+		},
+		{
+			"path" : "pages/courses/courses",
+			"style" : 
+			{
+				"navigationBarTitleText" : "课程管理"
+			}
+		},
+		{
+			"path" : "pages/select-course/select-course",
+			"style" : 
+			{
+				"navigationBarTitleText" : "选课"
+			}
 		}
 	],
 	"globalStyle": {

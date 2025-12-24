@@ -53,7 +53,9 @@ if img_path:
             face = gray[y:y+h, x:x+w]
             idnum, conf = recognizer.predict(face)
 
-            if conf < 100:
+            # 置信度阈值：越小越相似，0表示完全匹配
+            # 调整为 200 以进一步放宽识别要求，提高识别成功率
+            if conf < 200:
                 name = id2name.get(idnum, f"id_{idnum}")
                 result = {
                     "recognized": True,
